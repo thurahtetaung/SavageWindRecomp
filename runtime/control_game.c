@@ -11,6 +11,26 @@
 #include "perfmon.h"
 #include "rt.h"
 #include "game_sites.h"
+#include "cheats.h"
+
+// Read-only companion context. Stage identity is read directly; no proximity guess is exposed.
+static void cmd_adventure(int argc, char **argv, ControlReply *r) {
+    (void)argv;
+    if (argc != 1) { control_fail(r, "Usage: adventure"); return; }
+    char type[64], name[64];
+    cheat_current_stage(type, name, sizeof type);
+    if (!type[0] || !name[0]) { control_fail(r, "No stage available"); return; }
+    control_field_str(r, "stage_type", type);
+    control_field_str(r, "stage_name", name);
+    control_field_bool(r, "world_ready", cheats_world_ready());
+    if (!strcmp(type, "CDungeon")) {
+        const CheatShrine *shrine = cheat_current_shrine();
+        if (shrine && !strcmp(shrine->id, name)) {
+            control_field_str(r, "shrine_id", shrine->id);
+            control_field_str(r, "shrine_name", shrine->name);
+        }
+    }
+}
 
 uint64_t renderer_present_count(void);  // presented frames (the backend)
 bool control_camera_view(float view[12]);  // the world camera's view matrix (the backend; false: none)
@@ -373,6 +393,7 @@ void control_game_init(void) {
     cheats_init();
     static const ControlCmd player[] = {
         {"state", "", "Frame number, uptime, fps and hour", cmd_state, CONTROL_PLAYER},
+        {"adventure", "", "Read current stage and confirmed shrine for companion apps", cmd_adventure, CONTROL_PLAYER},
         {"pos", "", "Show the position and copy it as a line for goto or an issue", cmd_pos, CONTROL_PLAYER},
         {"camera", "", "Show the camera position and direction", cmd_camera, CONTROL_PLAYER},
         {"version", "", "Show the game version and system", cmd_version, CONTROL_PLAYER},

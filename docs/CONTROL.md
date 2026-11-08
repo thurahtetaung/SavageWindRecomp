@@ -40,6 +40,10 @@ game the way the window's close button does.
 
 ## Player safe commands
 
+`adventure` is a read-only companion snapshot: `stage_type`, `stage_name`, and `world_ready`,
+plus `shrine_id` and `shrine_name` only when the actual current stage is `CDungeon` and matches
+the local shrine catalog. It never infers a shrine from proximity and never changes game state.
+
 | command | what it does |
 |---|---|
 | `help` | the commands you can use |
