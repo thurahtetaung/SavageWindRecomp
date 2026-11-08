@@ -225,17 +225,13 @@ static void tab_warp(float scale) {
     const CheatPlace *sel = cheat_place(g_place_sel);
     if (sel) ImGui::TextColored(k_gold, "%s  (%.0f, %.0f, %.0f)", sel->name, sel->x, sel->y, sel->z);
     else hint("Pick a place.");
-    hint("Overworld only; get off your horse first. Far away? Use Via medallion (DLC Travel Medallion) for a proper load.");
-    ImGui::SameLine(ImGui::GetContentRegionMax().x - 620 * scale);
+    hint("A real fast travel, with the game's loading screen. Overworld only; inside a shrine, use the solver above.");
+    ImGui::SameLine(ImGui::GetContentRegionMax().x - 380 * scale);
     ImGui::BeginDisabled(!sel);
     if (ImGui::Button("Guide", ImVec2(130 * scale, 0)) && sel)
         cheat_guide_show(sel->name, !strcmp(sel->category, "Shrines") ? "shrine" : "place");
     ImGui::SameLine();
-    if (ImGui::Button("Via medallion", ImVec2(230 * scale, 0)) && sel) cheat_medallion_set(sel->x, sel->y, sel->z, sel->yaw);
-    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Reliable for long trips: moves your Travel Medallion there. \nThen open the map and fast travel to the medallion.");
-    ImGui::SameLine();
-    if (ImGui::Button("Warp now", ImVec2(220 * scale, 0)) || (go_now && sel)) cheat_warp(sel->x, sel->y, sel->z);
-    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Instant. Very long jumps can leave the game loading forever: \nuse Via medallion for those.");
+    if (ImGui::Button("Warp", ImVec2(220 * scale, 0)) || (go_now && sel)) cheat_travel_to(sel->x, sel->y, sel->z, sel->yaw);
     ImGui::EndDisabled();
 }
 

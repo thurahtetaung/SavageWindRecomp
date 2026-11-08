@@ -32,6 +32,7 @@
 #define FN_GDT_SET_F32 0x7000d35630ull    // (handle, float value in s0, debug)
 #define H_WARPDLC_POS 0x7001da6f44ull     // flag handles cached at start-up (WarpDLC_DestPos / _DestDegree)
 #define H_WARPDLC_DEG 0x7001da6f40ull
+#define FN_CHANGE_SCENE 0x70012082e0ull   // ksys::StageInfo::changeScene(map, pos, int, bool): calls sChangeScene
 
 static const struct { uint64_t addr; uint32_t word; } k_guard[] = {
     {FN_ITEM_GET, 0xd10243ff},     // sub sp, sp, #0x90
@@ -43,6 +44,9 @@ static const struct { uint64_t addr; uint32_t word; } k_guard[] = {
     {FN_GDT_SET_F32, 0xd10103ff},  // sub sp, sp, #0x40
     {0x7000d38a38, 0xb94f4501},    // ldr w1, [x8, #0xf44]    (setWarpDLC_DestPos's handle)
     {0x7000d389e8, 0xb94f4100},    // ldr w0, [x8, #0xf40]    (setWarpDLC_DestDegree's handle)
+    {FN_CHANGE_SCENE, 0xf00061a8},     // adrp x8, 0x7001e3f000
+    {FN_CHANGE_SCENE + 4, 0xf9429104}, // ldr x4, [x8, #0x520]   (sChangeScene)
+    {FN_CHANGE_SCENE + 16, 0xd61f0080},// br x4
     {0x7000b4f9a8, 0x396f2103},    // ldrb w3, [x8, #0xbc8]   (the getter's permission byte)
     {0x7000b4f9b0, 0xf945e109},    // ldr x9, [x8, #0xbc0]    (the getter's TriggerParam)
 };
@@ -55,6 +59,9 @@ static CheatItem *g_items;
 static int g_nitems;
 static CheatPlace *g_places;
 static int g_nplaces;
+typedef struct { char map[24], pos[48]; float x, y, z; } Start;
+static Start *g_starts;
+static int g_nstarts;
 static CheatShrine *g_shrines;
 static int g_nshrines;
 static CheatMark *g_marks;
@@ -102,6 +109,14 @@ static void load_catalog(void) {
         m->found_flag = dup_field(&p); m->done_flag = dup_field(&p);
         m->found = m->done = -1;
         if (*m->kind) g_nmarks++;
+    }
+    if (f) fclose(f);
+    f = fopen("cheats/starts.tsv", "rb");
+    cap = 0;
+    while (f && fgets(line, sizeof line, f)) {
+        if (g_nstarts == cap) { cap = cap ? cap * 2 : 512; g_starts = realloc(g_starts, (size_t)cap * sizeof *g_starts); }
+        Start *st = &g_starts[g_nstarts];
+        if (sscanf(line, "%23[^\t]\t%47[^\t]\t%f\t%f\t%f", st->map, st->pos, &st->x, &st->y, &st->z) == 5) g_nstarts++;
     }
     if (f) fclose(f);
     f = fopen("cheats/shrines.tsv", "rb");
@@ -169,8 +184,8 @@ const CheatPlace *cheat_place_find(const char *q) {
 }
 
 // ---- state
-enum { R_GIVE, R_RUPEES_ADD, R_RUPEES_SET, R_WARP, R_FLAG, R_FLAG_GET, R_MEDALLION };
-typedef struct { int kind; char name[96]; int a, b; float x, y, z; } Request;
+enum { R_GIVE, R_RUPEES_ADD, R_RUPEES_SET, R_WARP, R_FLAG, R_FLAG_GET, R_MEDALLION, R_SCENE, R_MEDPOS };
+typedef struct { int kind; char name[96]; char name2[64]; int a, b; float x, y, z; } Request;
 #define QMAX 32
 static pthread_mutex_t g_lock = PTHREAD_MUTEX_INITIALIZER;
 static Request g_queue[QMAX];
@@ -178,6 +193,7 @@ static int g_head, g_count;
 static char g_status[160] = "Ready.";
 static volatile int g_rupees = -1;
 static int g_supported = -1;  // -1 unchecked
+static volatile int g_scene_wait;  // a fast travel: 1 asked for, 2 its loading screen seen
 static char g_query[200];
 static volatile int g_query_done;
 
@@ -243,6 +259,28 @@ bool cheat_rupees_add(int delta) { Request r = {R_RUPEES_ADD}; r.a = delta; retu
 bool cheat_rupees_set(int value) { Request r = {R_RUPEES_SET}; r.a = value; return push(&r); }
 bool cheat_medallion_set(float x, float y, float z, float yaw) {
     Request r = {R_MEDALLION}; r.x = x; r.y = y; r.z = z; r.a = (int)(yaw * 100); return push(&r);
+}
+bool cheat_scene_change(const char *map, const char *pos) {
+    if (!map || !pos || strlen(map) >= 64 || strlen(pos) >= 96) return false;
+    Request r = {R_SCENE};
+    snprintf(r.name, sizeof r.name, "%s", pos);
+    snprintf(r.name2, sizeof r.name2, "%s", map);
+    return push(&r);
+}
+// Fast travel to any overworld spot: the game's own scene change (its loading screen) to the nearest ground start
+// position (cheats/starts.tsv), then, if that is more than a few metres away, a short hop onto the loaded ground.
+bool cheat_travel_to(float x, float y, float z, float yaw) {
+    (void)yaw;
+    pthread_once(&g_catalog_once, load_catalog);
+    const Start *best = NULL;
+    float bd = 1e30f;
+    for (int i = 0; i < g_nstarts; i++) {
+        float dx = g_starts[i].x - x, dy = g_starts[i].y - y, dz = g_starts[i].z - z, d = dx * dx + dy * dy * 0.25f + dz * dz;
+        if (d < bd) { bd = d; best = &g_starts[i]; }
+    }
+    if (!best) return cheat_warp(x, y, z);  // (no list: the instant warp)
+    if (!cheat_scene_change(best->map, best->pos)) return false;
+    return bd < 8.0f * 8.0f || cheat_warp(x, y + 0.5f, z);
 }
 bool cheat_warp(float x, float y, float z) { Request r = {R_WARP}; r.x = x; r.y = y; r.z = z; return push(&r); }
 // A spot that may be off the ground (a Korok on a cliff or in a tree, a tower top): warp to the nearest catalogued
@@ -435,6 +473,37 @@ static void run(const Request *r) {
         else set_status("Destination set, but you have no Travel Medallion (DLC 1): get it, or use Warp now.");
         break;
     }
+    case R_SCENE: {
+        Frame f;
+        if (!frame_begin(&f, r->name)) break;  // pos at base + 0x80 (string at + 0x100)
+        char *map = (char *)(uintptr_t)(f.base + 0x300);
+        snprintf(map, 0x80, "%s", r->name2);
+        uint64_t *ss = (uint64_t *)(uintptr_t)(f.base + 0x90);
+        ss[0] = rd64(GOT_SAFESTRING_VT) + 0x10;
+        ss[1] = f.base + 0x300;
+        f.c->x[0] = f.base + 0x90;  // map name
+        f.c->x[1] = f.base + 0x80;  // pos name
+        f.c->x[2] = 0;
+        f.c->x[3] = 0;
+        guest_call(f.c, FN_CHANGE_SCENE);
+        frame_end(&f);
+        g_scene_wait = 1;
+        set_status("Fast travel: %s / %s.", r->name2, r->name);
+        break;
+    }
+    case R_MEDPOS: {  // read the Travel Medallion destination back through the game's getter (0x7000d389f0)
+        Frame f;
+        if (!frame_begin(&f, "")) break;
+        float *v = (float *)(uintptr_t)(f.base + 0x60);
+        v[0] = v[1] = v[2] = -1;
+        f.c->x[0] = f.base + 0x60;
+        f.c->x[1] = 0;
+        guest_call(f.c, 0x7000d389f0ull);
+        snprintf(g_query, sizeof g_query, "WarpDLC_DestPos = %.1f %.1f %.1f", v[0], v[1], v[2]);
+        frame_end(&f);
+        g_query_done = 1;
+        break;
+    }
     case R_FLAG_GET: {
         int v; bool b;
         if (gdt_get_s32(r->name, &v)) snprintf(g_query, sizeof g_query, "%s = %d (s32)", r->name, v);
@@ -546,12 +615,20 @@ static void track_shrine(uint64_t frame) {
 // Presenting thread, once per presented frame.
 void cheats_frame(uint64_t frame) {
     Request r;
+    if (g_scene_wait && cheats_supported() && !cheats_world_ready()) g_scene_wait = 2;  // (the loading screen)
     if (!cheats_supported() || !cheats_world_ready()) return;
     track_shrine(frame);
     // A warp at a time: the next one waits for the last to finish and the world to stream in (about 2 s), so a
     // two-step warp (ground point first, then a cliff or tree spot) lands on loaded ground.
     static uint64_t last_warp;
     if (frame - last_warp < 120) return;
+    static uint64_t wait_since;
+    if (g_scene_wait) {  // a fast travel is under way: wait for its loading screen to come and go
+        if (!wait_since) wait_since = frame;
+        if (framepace_loading_ui()) g_scene_wait = 2;
+        else if (g_scene_wait == 2 || frame - wait_since > 600) { g_scene_wait = 0; wait_since = 0; last_warp = frame; }
+        return;
+    }
     if (take(true, &r)) { g_near_shrine = -1; last_warp = frame; run(&r); }
 }
 
@@ -616,7 +693,7 @@ static void cmd_warp(int argc, char **argv, ControlReply *rep) {
     if (!p) { control_fail(rep, "No place matches \"%s\"", q); return; }
     char what[200];
     snprintf(what, sizeof what, "Warping to %s", p->name);
-    reply_queued(rep, cheat_warp(p->x, p->y, p->z), what);
+    reply_queued(rep, cheat_travel_to(p->x, p->y, p->z, p->yaw), what);  // (a real fast travel)
 }
 
 static void cmd_cheatstate(int argc, char **argv, ControlReply *rep) {
@@ -644,6 +721,7 @@ static void cmd_flag(int argc, char **argv, ControlReply *rep) {
         return;
     }
     Request r = {R_FLAG_GET};
+    if (!strcmp(argv[1], "WarpDLC_DestPos")) r.kind = R_MEDPOS;
     snprintf(r.name, sizeof r.name, "%s", argv[1]);
     g_query_done = 0;
     if (!push(&r)) { control_fail(rep, "Queue full"); return; }
@@ -661,6 +739,26 @@ static void cmd_medallion(int argc, char **argv, ControlReply *rep) {
     char what[200];
     snprintf(what, sizeof what, "Travel Medallion to %s", p->name);
     reply_queued(rep, cheat_medallion_set(p->x, p->y, p->z, p->yaw), what);
+}
+
+static void cmd_scene(int argc, char **argv, ControlReply *rep) {
+    if (argc != 3) { control_fail(rep, "Usage: scene <map, e.g. MainField/D-6> <start position name | WarpIcon>"); return; }
+    reply_queued(rep, cheat_scene_change(argv[1], argv[2]), "Scene change");
+}
+static void cmd_travel(int argc, char **argv, ControlReply *rep) {
+    if (argc < 2) { control_fail(rep, "Usage: travel <place>  (a real fast travel, with the game's loading screen)"); return; }
+    char *e1, *e2, *e3;
+    if (argc == 4) {  // travel <x> <y> <z>
+        float x = strtof(argv[1], &e1), y = strtof(argv[2], &e2), z = strtof(argv[3], &e3);
+        if (!*e1 && !*e2 && !*e3) { reply_queued(rep, cheat_travel_to(x, y, z, 0), "Fast travel to a position"); return; }
+    }
+    char q[160] = "";
+    for (int i = 1; i < argc; i++) { if (i > 1) strncat(q, " ", sizeof q - strlen(q) - 1); strncat(q, argv[i], sizeof q - strlen(q) - 1); }
+    const CheatPlace *p = cheat_place_find(q);
+    if (!p) { control_fail(rep, "No place matches \"%s\"", q); return; }
+    char what[200];
+    snprintf(what, sizeof what, "Fast travel to %s", p->name);
+    reply_queued(rep, cheat_travel_to(p->x, p->y, p->z, p->yaw), what);
 }
 
 static void cmd_shrine(int argc, char **argv, ControlReply *rep) {
@@ -690,6 +788,8 @@ void cheats_init(void) {
         {"give", "<item> [count]", "Add an item to the inventory (local cheat)", cmd_give, CONTROL_PLAYER},
         {"rupees", "[n | +n | -n | max]", "Show or change rupees (local cheat)", cmd_rupees, CONTROL_PLAYER},
         {"warp", "<place>", "Warp to a shrine, tower, town or stable (local cheat)", cmd_warp, CONTROL_PLAYER},
+        {"travel", "<place> | <x> <y> <z>", "Fast travel to a place, with the game's own loading screen (local cheat)", cmd_travel, CONTROL_PLAYER},
+        {"scene", "<map> <pos>", "Change scene to a named start position (local cheat)", cmd_scene, CONTROL_PLAYER},
         {"medallion", "<place>", "Move the Travel Medallion to a place, for a proper fast travel there (local cheat)", cmd_medallion, CONTROL_PLAYER},
         {"shrine", "[end | entrance | chest <n>]", "Shrine solver: warp to the end of the shrine you are in", cmd_shrine, CONTROL_PLAYER},
         {"flag", "<name> [value]", "Read a game data flag, or set an s32 one (local cheat)", cmd_flag, CONTROL_PLAYER},

@@ -1,56 +1,60 @@
 # Local cheat panel (BOTW 1.9.0)
 
 A local, experimental addition on the `local-assists` branch. Open it with **F9**, **L3 + R3** on a controller,
-or **Options > Cheats (local)**. Esc or B closes it. Everything it does is queued and runs on the game's thread
-once you are back in the game (menus closed, no cutscene or loading screen).
+or **Options > Cheats (local)**. Esc or B closes it. Actions are queued and run on the game's thread once you are
+back in the game (menus closed, no cutscene or loading screen).
 
 | Tab | What it does |
 | --- | --- |
-| Player | The five assists (stamina, health, equipment, arrows, food); rupees (+100 to +100,000, max, exact value); +10 Korok Seeds, +4 Spirit Orbs |
-| Items | Search or browse every pouch item by category (weapons, bows, arrows, shields, armor by upgrade level, materials, roasted/frozen food, safe key items), pick a quantity, Give (or double-click) |
-| Warp | Search or browse shrines, towers, towns, stables and Divine Beasts; Warp (or double-click). Overworld only |
-| World | Set the time of day (slider or presets) and freeze it |
+| Player | Assists (stamina, health, equipment, arrows, food, horse stamina); rupees; Korok Seeds and Spirit Orbs |
+| Items | Search or browse every pouch item by category, pick a quantity, Give (or double-click) |
+| Warp | Shrine solver (inside a shrine: the monk, the entrance, each chest), then shrines, towers, towns, stables and Divine Beasts (their nearby town): Warp is a real fast travel |
+| Map | Hyrule with shrines, towers, Divine Beasts and all 900 Korok spots coloured by your save; nearest missing; Warp here and Guide |
+| Guide | Zelda Wiki pages suggested from where you are (the shrine you are in, the nearest unfinished shrine, the area); search with live suggestions; solutions hidden until asked |
+| Amiibo | A virtual amiibo reader: place any Zelda figure (Wolf Link, Epona's Link, Champions...), then use the amiibo rune |
+| World | Time of day and freezing it |
 
-The F12 console has the same actions: `give <item> [count]`, `rupees [n | +n | -n | max]`, `warp <place>`,
-`cheatmenu`, and `cheatstate` (why queued requests are waiting).
+Console (F12) equivalents: `give <item> [count]`, `rupees [n | +n | -n | max]`, `warp <place>`, `travel <place | x y z>`,
+`shrine [end | entrance | chest n]`, `flag <name> [value]`, `assist <name> [on|off]`, `cheatmenu`, `cheatstate`.
 
-## Item and place lists
+## Lists from your own files
 
-The lists come from your own game files and are never committed. The build helper creates them when given the
-folder that holds `romfs` (and optionally `dlc1`/`aoc1`):
+The item, place, map, shrine and fast-travel lists come from your game files and are never committed:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File tools/local_assists_build.ps1 -ExeFSPath 'E:\MyGame\exefs' -GameRoot 'E:\MyGame'
 ```
 
-or directly: `python tools/cheat_catalog.py <game folder> <data root>\cheats`. It reads `ActorInfo.product.sbyml`,
-the English message archive, and `Map/MainField/Static.smubin` (`tools/botw_formats.py`: Yaz0, SARC, BYML, MSBT).
-Weapons get their full durability; warp points use the game's own fast-travel start positions.
+or `python tools/cheat_catalog.py <folder with romfs and dlc1> <data root>\cheats`. It writes `items.tsv`,
+`places.tsv`, `map.tsv`, `shrines.tsv` and `starts.tsv` (`tools/botw_formats.py` reads Yaz0, SARC, BYML and MSBT).
 
 ## How it works
 
-`runtime/cheats.c` calls the game's own functions, so inventory and save data stay consistent:
+Everything calls the game's own code (1.9.0; entry words are checked before the first call, other builds refuse):
 
-| Function (1.9.0) | Found by |
+| Feature | Game code |
 | --- | --- |
-| `PauseMenuDataMgr::itemGet(name, value, modifier)` at `0x7000d921bc` | its `"PouchGet"` play report |
-| GameData increase-s32 `(delta, name, debug)` at `0x7000d34b30` | the rupee helper's callee; adds (verified live) |
-| `TriggerParam::getS32(param, &out, name, check, 1)` at `0x7001137684` | a `CurrentRupee` reader |
+| Give items | `PauseMenuDataMgr::itemGet` (0x7000d921bc) |
+| Rupees, flags | GameData increase-s32 (0x7000d34b30), TriggerParam getS32 / getBool |
+| Warp | `ksys::StageInfo::changeScene` (0x70012082e0, through `sChangeScene`) to the nearest ground start position, then a short hop |
+| Shrine solver | The current stage (`StageInfo` map type / name, 0x7001dae3a0 / 0x7001dae3d8) and the shrine's own map data |
+| Horse stamina | A verified patch site skips the spur's charge store (0x6b0d2c) |
+| Amiibo | `nfp:user` answers as a reader holding the chosen figure (runtime/services/nfp.c) |
+| Guide | Zelda Wiki's MediaWiki API over WinHTTP, only when you open a page; cached in `cheats/wiki/` |
 
-Their entry words are checked before the first call; on any other build the panel says it is disabled. Calls run
-from the camera controller's once-a-frame flag read (`rt_cam_reverse`), a game-thread point where the game itself
-reads game data. Warps reuse the control layer's teleport on the presenting thread.
+Calls run from the camera controller's once-a-frame flag read (`rt_cam_reverse`), on the game thread.
 
-## Validated (2026-11-08, disposable 100% save)
+## Validated on the disposable 100% save (2026-11-08)
 
-- Rupees: read, add (+1,234, +250) and set (5,000).
-- Items: Korok Seeds 459 -> 462, Apples 230 -> 235, arrows capped at 999, Hylian Hood added.
-- Full weapon pouch: the game refuses the weapon and the panel says so.
-- Warp: Riverside Stable -> Kakariko Village, world loaded normally.
-- Panel opened over gameplay; layout checked.
+- Items, rupees, Korok Seeds; full-pouch refusal reported.
+- Horse stamina on and off in open field (user-tested); Map and Guide (user-tested); shrine solver (user-tested).
+- Fast travel: a shrine pad by Kakariko, Gerudo Town, Vah Rudania's town, the Shrine of Resurrection, and a
+  Hebra Korok spot (fast travel to the nearest shrine, then a hop): all loaded with the game's own loading screen.
 
-## Limits and not yet done
+## Limits
 
-- Equipment can only be added while that pouch tab has room. Cooked dishes and quest/progress key items are left out.
-- Warps target the overworld; using one inside a shrine, Divine Beast or other interior is unsupported.
-- Not implemented yet: horse stamina, amiibo, weather, map helper.
+- Equipment can be given only while that pouch tab has room. Cooked dishes and quest key items are not offered.
+- Warps target the overworld. The instant position warp (`teleport`, kept for short hops) can leave the world
+  loading forever on long jumps or mid-air targets; the panel's Warp no longer uses it for those.
+- Amiibo: needs Options > Gameplay > amiibo on. Each scan counts as a new figure.
+- Weather control and TOTK are not done yet.

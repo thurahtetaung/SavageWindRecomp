@@ -203,12 +203,7 @@ void cheat_tab_map(float scale) {
     if (ImGui::Button("Whole map")) { g_cx = g_cz = 0; g_zoom = 1; }
     ImGui::BeginDisabled(!sel);
     ImGui::SameLine();
-    if (ImGui::Button("Warp here") && sel) {
-        if (sel->kind[0] == 'k' || sel->kind[0] == 't') cheat_warp_spot(sel->x, sel->y, sel->z);  // (may be off the ground)
-        else cheat_warp(sel->x, sel->y + 0.5f, sel->z);
-    }
-    ImGui::SameLine();
-    if (ImGui::Button("Via medallion") && sel) cheat_medallion_set(sel->x, sel->y + (sel->kind[0] == 'k' ? 1.0f : 0), sel->z, 0);
+    if (ImGui::Button("Warp here") && sel) cheat_travel_to(sel->x, sel->y, sel->z, 0);  // (fast travel, then a short hop)
     ImGui::SameLine();
     if (ImGui::Button("Guide") && sel) cheat_guide_show(sel->name, hint_of(sel));
     ImGui::EndDisabled();

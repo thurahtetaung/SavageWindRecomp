@@ -45,7 +45,12 @@ bool cheat_warp(float x, float y, float z);
 bool cheat_warp_spot(float x, float y, float z);
 // The reliable warp: make (x, y, z) the DLC Travel Medallion's destination, so the map's fast travel to the medallion
 // takes Link there with the game's own loading screen. Needs the medallion (DLC 1). Overworld spots only.
-bool cheat_medallion_set(float x, float y, float z, float yaw_deg);  // via the nearest ground point (cliffs, trees, tower tops)
+bool cheat_medallion_set(float x, float y, float z, float yaw_deg);
+// A real fast travel (the game's own scene change, with its loading screen): to a named start position
+// ("MainField/A-1", "StartPos_CDungeon118"), or with pos "WarpIcon" to the Travel Medallion's destination.
+bool cheat_scene_change(const char *map, const char *pos);
+// Fast travel to any overworld spot: the medallion's destination is set there, then the scene changes to it.
+bool cheat_travel_to(float x, float y, float z, float yaw_deg);  // via the nearest ground point (cliffs, trees, tower tops)
 bool cheat_flag_s32_set(const char *name, int value);
 int cheat_pending(void);
 

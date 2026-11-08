@@ -154,6 +154,16 @@ def main(root, out):
     with open(os.path.join(out, 'shrines.tsv'), 'w', encoding='utf-8', newline='\n') as fp:
         for r in shrines:
             fp.write('\t'.join(f'{x:.2f}' if isinstance(x, float) else str(x) for x in r) + '\n')
+    # Fast-travel destinations: every ground start position of the overworld, by its map section and name (the
+    # runtime's Warp is the game's own scene change to the nearest one, then a short hop to the exact spot).
+    bad = ('Demo', 'Sky', 'Battle', 'Escape', 'Fall', 'Clear_', 'Glide', 'Retire', 'Restart', 'Failed', 'Naked')
+    with open(os.path.join(out, 'starts.tsv'), 'w', encoding='utf-8', newline='\n') as fp:
+        for sp in static.get('StartPos', []):
+            name, sec = sp.get('PosName', ''), sp.get('Map', '')
+            if not name or not sec or any(b in name for b in bad):
+                continue
+            t = sp['Translate']
+            fp.write(f"MainField/{sec}\t{name}\t{t['X']:.2f}\t{t['Y']:.2f}\t{t['Z']:.2f}\n")
     marks = map_markers(static, start, boot, loc)
     with open(os.path.join(out, 'map.tsv'), 'w', encoding='utf-8', newline='\n') as fp:
         for m in marks:
