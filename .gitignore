@@ -38,3 +38,8 @@ tools/ghidra/gq.local.json
 docs/RAMAS.md
 # the player's own colour LUTs (runtime/color_grade.h): in the data root, which is the checkout in a source build
 /luts/
+
+# Local experimental runtime and validation artifacts
+/local-data/
+/local-verification/
+/local-test-results/

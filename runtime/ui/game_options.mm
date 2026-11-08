@@ -37,6 +37,7 @@ extern "C" {
 #include "../color_grade.h"
 #include "../pc_cursor.h"
 #include "../window_size.h"
+#include "../local_assists.h"
 void rt_request_reboot(int kind);           // runtime/main.c (1: start the game again)
 void menu_request_window_apply(void);       // menu.mm (fullscreen / window size, applied by the window loop)
 void menu_size_list_open(void);             // menu.mm (Window size's list, over the screen)
@@ -259,6 +260,9 @@ void build_items(void) {
     std::vector<Item> &v = g_items;
     // first page: the sections (the game's own options are on Gameplay and Controls)
     v.push_back(button(P_MAIN, "Gameplay", "Mini-map, HUD, jump button and more.", "Open", A_PAGE, P_GAMEPLAY));
+    v.push_back(toggle(P_GAMEPLAY, "Infinite stamina (local)", "Experimental: prevents stamina loss. Recovery still works.",
+                       [](const Item &) { return local_stamina_enabled(); },
+                       [](const Item &, int x) { local_stamina_set(x); }, 0));
     v.push_back(button(P_MAIN, "Video", "Screen, resolution and image quality.", "Open", A_PAGE, P_VIDEO));
 #ifndef __APPLE__
     v.push_back(button(P_MAIN, "Colour", "Presets, exposure, contrast, saturation and LUTs.", "Open", A_PAGE, P_COLOUR));

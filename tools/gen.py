@@ -616,6 +616,9 @@ def generate(name, nso, base, outdir, opts, sites=None):
     if name == 'main':
         m.sites = sites if sites is not None else main_sites(m.nso, base, opts)[1]
         m.patches = patches.table(m.sites) if m.sites else {}
+        # Local stamina assist: fail closed on another build or instruction.
+        import local_assists
+        local_assists.install(m)
     starts = m.boundaries()
     hle = {}
     if opts.hle and os.path.exists(opts.hle):
