@@ -741,13 +741,20 @@ static void cmd_medallion(int argc, char **argv, ControlReply *rep) {
     reply_queued(rep, cheat_medallion_set(p->x, p->y, p->z, p->yaw), what);
 }
 
-static void cmd_amiibo(int argc, char **argv, ControlReply *rep) {
+// Put a figure on the virtual reader with no daily limit: BotW keeps the figures read today (AmiiboTouchHistory) and
+// the day it last read one (AmiiboLastTouchDate, YYYYMMDD); an old date makes it start a new day's history.
+void cheat_amiibo_place(uint64_t id) {
     extern void nfp_virtual_place(uint64_t amiibo_id);
+    cheat_flag_s32_set("AmiiboLastTouchDate", 20000101);
+    nfp_virtual_place(id);
+}
+
+static void cmd_amiibo(int argc, char **argv, ControlReply *rep) {
     if (argc != 2) { control_fail(rep, "Usage: amiibo <16-hex-digit amiibo id | wolf | epona>"); return; }
     uint64_t id = !strcmp(argv[1], "wolf") ? 0x01030000024f0902ull : !strcmp(argv[1], "epona") ? 0x0100000000040002ull
                                                                     : strtoull(argv[1], NULL, 16);
     if (!id) { control_fail(rep, "Not an amiibo id: %s", argv[1]); return; }
-    nfp_virtual_place(id);
+    cheat_amiibo_place(id);
     control_field_str(rep, "placed", argv[1]);
 }
 

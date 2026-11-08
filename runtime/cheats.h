@@ -49,6 +49,8 @@ bool cheat_medallion_set(float x, float y, float z, float yaw_deg);
 // A real fast travel (the game's own scene change, with its loading screen): to a named start position
 // ("MainField/A-1", "StartPos_CDungeon118"), or with pos "WarpIcon" to the Travel Medallion's destination.
 bool cheat_scene_change(const char *map, const char *pos);
+// Put an amiibo figure on the virtual reader, with the game's once-a-day limit reset first.
+void cheat_amiibo_place(uint64_t amiibo_id);
 // Fast travel to any overworld spot: the medallion's destination is set there, then the scene changes to it.
 bool cheat_travel_to(float x, float y, float z, float yaw_deg);  // via the nearest ground point (cliffs, trees, tower tops)
 bool cheat_flag_s32_set(const char *name, int value);

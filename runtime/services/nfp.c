@@ -81,7 +81,14 @@ static void detect(void) {
     if (!g_placed || g_state != S_SEARCHING) return;
     g_tag = g_placed;
     g_mounted_once = false;
-    for (int i = 0; i < 7; i++) g_uid[i] = (uint8_t)(rand() & 0xff);
+    // A UID never seen before: the game remembers which figures (by UID) it read today. rand() unseeded repeated the
+    // same UIDs every launch, so the first scan after a restart was refused as "already used today".
+    static uint64_t counter;
+    uint64_t x = plat_now_ns() ^ (++counter * 0x9e3779b97f4a7c15ull) ^ (uint64_t)time(NULL) << 20;
+    for (int i = 0; i < 7; i++) {
+        x ^= x >> 33; x *= 0xff51afd7ed558ccdull; x ^= x >> 29;
+        g_uid[i] = (uint8_t)x;
+    }
     g_uid[0] = 0x04;  // (NXP's manufacturer byte, as on real NTAG215 figures)
     load_area(g_tag);
     g_state = S_FOUND;
@@ -95,7 +102,7 @@ static void detect(void) {
 // only then waits on it, so a signal sent inside StartDetection itself was lost.
 static void *delayed_tap(void *arg) {
     int gen = (int)(intptr_t)arg;
-    struct timespec ts = {0, 150 * 1000 * 1000};
+    struct timespec ts = {0, 60 * 1000 * 1000};  // (the game's first wait lasts about 110 ms)
     nanosleep(&ts, NULL);
     pthread_mutex_lock(&g_lock);
     if (gen == g_gen) detect();
@@ -111,6 +118,7 @@ static void tap_soon(void) {  // (caller holds g_lock)
 void nfp_virtual_place(uint64_t amiibo_id) {
     pthread_mutex_lock(&g_lock);
     g_placed = amiibo_id;
+    g_mounted_once = false;
     snprintf(g_last, sizeof g_last, "Figure on the reader: use the amiibo rune in the game.");
     tap_soon();  // (the game may already be waiting)
     pthread_mutex_unlock(&g_lock);
@@ -150,6 +158,7 @@ static void nfp_user(Service *s, IpcReq *req, IpcResp *resp) {
             g_placed = 0;
             snprintf(g_last, sizeof g_last, "Figure read by the game. Place it again for another scan.");
         }
+        g_mounted_once = false;
         g_gen++;  // (a pending tap is for this detection only)
         g_state = S_INITIALIZED;
         g_area_open = false;

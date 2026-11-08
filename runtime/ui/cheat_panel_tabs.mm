@@ -419,7 +419,7 @@ void cheat_tab_amiibo(float scale) {
         ImGui::PushID(i);
         if (ImGui::Selectable(k_figures[i].name, sel == i, ImGuiSelectableFlags_AllowDoubleClick)) {
             sel = i;
-            if (ImGui::IsMouseDoubleClicked(0)) nfp_virtual_place(k_figures[i].id);
+            if (ImGui::IsMouseDoubleClicked(0)) cheat_amiibo_place(k_figures[i].id);
         }
         ImGui::SameLine(ImGui::GetContentRegionAvail().x * 0.45f + ImGui::GetCursorStartPos().x);
         ImGui::TextColored(k_dim, "%s", k_figures[i].gives);
@@ -431,7 +431,7 @@ void cheat_tab_amiibo(float scale) {
     ImGui::TextColored(k_gold, "%s", k_figures[sel].name);
     ImGui::SameLine();
     dim_text(st);
-    if (ImGui::Button("Place on reader", ImVec2(320 * scale, 0))) nfp_virtual_place(k_figures[sel].id);
+    if (ImGui::Button("Place on reader", ImVec2(320 * scale, 0))) cheat_amiibo_place(k_figures[sel].id);
     ImGui::SameLine();
     dim_text("Figure data (like Wolf Link's hearts) is kept in cheats/amiibo/.");
 }
