@@ -11,6 +11,8 @@ extern "C" {
 
 typedef struct { const char *category, *actor, *name; int value; } CheatItem;   // value: weapon durability x100
 typedef struct { const char *category, *name; float x, y, z, yaw; } CheatPlace;
+// A map marker (cheats/map.tsv): kind is "shrine", "tower", "korok", "beast"; found / done come from save flags.
+typedef struct { const char *kind, *name; float x, y, z; const char *found_flag, *done_flag; int found, done; } CheatMark;
 
 // The catalog (<data root>/cheats/items.tsv and places.tsv, made by tools/cheat_catalog.py from the player's files).
 int cheat_item_count(void);
@@ -19,6 +21,13 @@ int cheat_place_count(void);
 const CheatPlace *cheat_place(int i);
 const CheatItem *cheat_item_find(const char *actor_or_name);
 const CheatPlace *cheat_place_find(const char *name);  // case-insensitive substring of the English name
+
+int cheat_mark_count(void);
+const CheatMark *cheat_mark(int i);   // found / done: 1 yes, 0 no, -1 not read yet
+void cheat_marks_want(void);          // the map is on screen: keep found / done fresh (a few markers per frame)
+bool cheat_link_position(float out[3]);
+int cheat_inside_shrine(void);       // map marker index of the shrine Link seems to be in, or -1 (a guess)
+
 
 bool cheats_supported(void);   // the loaded game is the verified build
 bool cheats_world_ready(void); // a world is loaded and the game is not paused (queued requests run then)

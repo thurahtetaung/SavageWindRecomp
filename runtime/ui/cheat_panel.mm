@@ -1,6 +1,7 @@
 // The local cheat panel (runtime/ui/cheat_panel.h). Everything it does is queued through runtime/cheats.h and runs on
 // the game's thread once the game is unpaused, so it is safe to use from the pause menu.
 #include "cheat_panel.h"
+#include "cheat_panel_tabs.h"
 
 #include <atomic>
 #include <ctype.h>
@@ -77,6 +78,7 @@ static void tab_player(float scale) {
     assist_row(LOCAL_DURABILITY, "Unbreakable equipment", "Weapons, bows and shields keep durability (enemies' too).");
     assist_row(LOCAL_ARROWS, "Infinite arrows", "Firing keeps your arrows (you need at least one).");
     assist_row(LOCAL_FOOD, "Infinite food", "Eating keeps the item. Turn off before quests that need you to hand food over.");
+    assist_row(LOCAL_HORSE, "Infinite horse stamina", "Spurring your horse never uses up a spur.");
 
     section("Rupees");
     int r = cheat_rupees_cached();
@@ -174,6 +176,8 @@ static void tab_items(float scale) {
     ImGui::SameLine(ImGui::GetContentRegionMax().x - 220 * scale);
     ImGui::BeginDisabled(!sel);
     if (ImGui::Button("Give", ImVec2(220 * scale, 0)) || (give_now && sel)) cheat_give(sel->actor, sel->value, g_qty);
+    ImGui::SameLine(ImGui::GetContentRegionMax().x - 360 * scale);
+    if (ImGui::Button("Guide", ImVec2(130 * scale, 0)) && sel) cheat_guide_show(sel->name, "item");
     ImGui::EndDisabled();
 }
 
@@ -220,8 +224,11 @@ static void tab_warp(float scale) {
     if (sel) ImGui::TextColored(k_gold, "%s  (%.0f, %.0f, %.0f)", sel->name, sel->x, sel->y, sel->z);
     else hint("Pick a place.");
     hint("Overworld only: leave shrines and Divine Beasts first. The warp happens when you close the menus.");
-    ImGui::SameLine(ImGui::GetContentRegionMax().x - 220 * scale);
+    ImGui::SameLine(ImGui::GetContentRegionMax().x - 360 * scale);
     ImGui::BeginDisabled(!sel);
+    if (ImGui::Button("Guide", ImVec2(130 * scale, 0)) && sel)
+        cheat_guide_show(sel->name, !strcmp(sel->category, "Shrines") ? "shrine" : "place");
+    ImGui::SameLine();
     if (ImGui::Button("Warp", ImVec2(220 * scale, 0)) || (go_now && sel)) cheat_warp(sel->x, sel->y, sel->z);
     ImGui::EndDisabled();
 }
@@ -284,10 +291,20 @@ void cheat_panel_draw(ImGuiIO &io, float scale, ImFont *font) {
     else ImGui::TextColored(k_dim, "%s", status);
 
     if (ImGui::BeginTabBar("##tabs")) {
-        if (ImGui::BeginTabItem("Player")) { tab_player(scale); ImGui::EndTabItem(); }
-        if (ImGui::BeginTabItem("Items")) { tab_items(scale); ImGui::EndTabItem(); }
-        if (ImGui::BeginTabItem("Warp")) { tab_warp(scale); ImGui::EndTabItem(); }
-        if (ImGui::BeginTabItem("World")) { tab_world(scale); ImGui::EndTabItem(); }
+        int want = g_cheat_select_tab;
+        g_cheat_select_tab = -1;
+        auto flags = [&](int t) { return want == t ? ImGuiTabItemFlags_SetSelected : 0; };
+        static bool guide_opened;
+        if (ImGui::BeginTabItem("Player", NULL, flags(CHEAT_TAB_PLAYER))) { tab_player(scale); ImGui::EndTabItem(); }
+        if (ImGui::BeginTabItem("Items", NULL, flags(CHEAT_TAB_ITEMS))) { tab_items(scale); ImGui::EndTabItem(); }
+        if (ImGui::BeginTabItem("Warp", NULL, flags(CHEAT_TAB_WARP))) { tab_warp(scale); ImGui::EndTabItem(); }
+        if (ImGui::BeginTabItem("Map", NULL, flags(CHEAT_TAB_MAP))) { cheat_tab_map(scale); ImGui::EndTabItem(); }
+        if (ImGui::BeginTabItem("Guide", NULL, flags(CHEAT_TAB_GUIDE))) {
+            cheat_tab_guide(scale, !guide_opened);
+            guide_opened = true;
+            ImGui::EndTabItem();
+        }
+        if (ImGui::BeginTabItem("World", NULL, flags(CHEAT_TAB_WORLD))) { tab_world(scale); ImGui::EndTabItem(); }
         ImGui::EndTabBar();
     }
     bool typing = ImGui::GetIO().WantTextInput;

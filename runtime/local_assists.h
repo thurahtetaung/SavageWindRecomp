@@ -1,6 +1,6 @@
 #pragma once
 #include <stdint.h>
-enum { LOCAL_STAMINA, LOCAL_HEALTH, LOCAL_DURABILITY, LOCAL_ARROWS, LOCAL_FOOD, LOCAL_ASSIST_COUNT };
+enum { LOCAL_STAMINA, LOCAL_HEALTH, LOCAL_DURABILITY, LOCAL_ARROWS, LOCAL_FOOD, LOCAL_HORSE, LOCAL_ASSIST_COUNT };
 int local_assist_enabled(int assist);
 void local_assist_set(int assist, int enabled);
 const char *local_assist_name(int assist);

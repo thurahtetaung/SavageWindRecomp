@@ -5,7 +5,7 @@
 static void command(int argc, char **argv, ControlReply *reply) {
     if (argc < 2 || argc > 3 || local_assist_find(argv[1]) < 0 ||
         (argc == 3 && strcmp(argv[2], "on") && strcmp(argv[2], "off"))) {
-        control_fail(reply, "Usage: assist <stamina|health|durability|arrows|food> [on|off]");
+        control_fail(reply, "Usage: assist <stamina|health|durability|arrows|food|horse> [on|off]");
         return;
     }
     int assist = local_assist_find(argv[1]);

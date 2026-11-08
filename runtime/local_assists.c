@@ -5,7 +5,7 @@
 #include <string.h>
 
 static atomic_int enabled[LOCAL_ASSIST_COUNT];
-static const char *names[] = {"stamina", "health", "durability", "arrows", "food"};
+static const char *names[] = {"stamina", "health", "durability", "arrows", "food", "horse"};
 int local_assist_enabled(int assist) {
     return assist >= 0 && assist < LOCAL_ASSIST_COUNT ? atomic_load_explicit(&enabled[assist], memory_order_relaxed) : 0;
 }

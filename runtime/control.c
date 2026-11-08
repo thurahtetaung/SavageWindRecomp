@@ -540,12 +540,16 @@ bool control_run_fn(ControlFn fn, int argc, char **argv, char *msg, size_t n) {
     return ok;
 }
 
+// (weak: tools/test_control.c links this file alone)
+extern void control_tp_frame(uint64_t) __attribute__((weak));
+extern void cheats_frame(uint64_t) __attribute__((weak));
+
 void control_frame(uint64_t frame) {
     if (!initialized) return;
     control_place_frame();
     if (dev_mode) control_game_frame(frame);
-    else { extern void control_tp_frame(uint64_t); control_tp_frame(frame); }  // (a cheat warp in progress)
-    { extern void cheats_frame(uint64_t); cheats_frame(frame); }
+    else if (control_tp_frame) control_tp_frame(frame);  // (a cheat warp in progress)
+    if (cheats_frame) cheats_frame(frame);
     console_pump();
     if (!queued) return;
     pthread_mutex_lock(&queue_lock);

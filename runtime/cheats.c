@@ -13,10 +13,12 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <SDL3/SDL_timer.h>
 
 #include "control.h"
 #include "game_sites.h"
 #include "rt.h"
+#include "local_assists.h"
 #include "framepace.h"
 
 #define GOT_GDT_MGR 0x7001d66478ull       // &ksys::gdt::Manager::sInstance
@@ -25,11 +27,14 @@
 #define FN_ITEM_GET 0x7000d921bcull
 #define FN_GDT_SET_S32 0x7000d34b30ull
 #define FN_TP_GET_S32 0x7001137684ull
+#define FN_TP_GET_BOOL 0x70011375ecull
 
 static const struct { uint64_t addr; uint32_t word; } k_guard[] = {
     {FN_ITEM_GET, 0xd10243ff},     // sub sp, sp, #0x90
     {FN_GDT_SET_S32, 0xd100c3ff},  // sub sp, sp, #0x30
     {FN_TP_GET_S32, 0xa9bd7bfd},   // stp x29, x30, [sp, #-0x30]!
+    {FN_TP_GET_BOOL, 0xa9bd7bfd},  // stp x29, x30, [sp, #-0x30]!
+    {0x700061f794, 0x396fa123},    // ldrb w3, [x9, #0xbe8]   (the bool getter's permission byte)
     {0x7000b4f9a8, 0x396f2103},    // ldrb w3, [x8, #0xbc8]   (the getter's permission byte)
     {0x7000b4f9b0, 0xf945e109},    // ldr x9, [x8, #0xbc0]    (the getter's TriggerParam)
 };
@@ -42,6 +47,8 @@ static CheatItem *g_items;
 static int g_nitems;
 static CheatPlace *g_places;
 static int g_nplaces;
+static CheatMark *g_marks;
+static int g_nmarks;
 static pthread_once_t g_catalog_once = PTHREAD_ONCE_INIT;
 
 static char *dup_field(char **p) {
@@ -72,7 +79,22 @@ static void load_catalog(void) {
         if (sscanf(p, "%f\t%f\t%f\t%f", &pl->x, &pl->y, &pl->z, &pl->yaw) == 4) g_nplaces++;
     }
     if (f) fclose(f);
-    LOG("[cheats] catalog: %d items, %d places\n", g_nitems, g_nplaces);
+    f = fopen("cheats/map.tsv", "rb");
+    cap = 0;
+    while (f && fgets(line, sizeof line, f)) {
+        char *p = line;
+        if (g_nmarks == cap) { cap = cap ? cap * 2 : 1024; g_marks = realloc(g_marks, (size_t)cap * sizeof *g_marks); }
+        CheatMark *m = &g_marks[g_nmarks];
+        m->kind = dup_field(&p); m->name = dup_field(&p);
+        char *xs = dup_field(&p), *ys = dup_field(&p), *zs = dup_field(&p);
+        m->x = (float)atof(xs); m->y = (float)atof(ys); m->z = (float)atof(zs);
+        free(xs); free(ys); free(zs);
+        m->found_flag = dup_field(&p); m->done_flag = dup_field(&p);
+        m->found = m->done = -1;
+        if (*m->kind) g_nmarks++;
+    }
+    if (f) fclose(f);
+    LOG("[cheats] catalog: %d items, %d places, %d map markers\n", g_nitems, g_nplaces, g_nmarks);
 }
 int cheat_item_count(void) { pthread_once(&g_catalog_once, load_catalog); return g_nitems; }
 const CheatItem *cheat_item(int i) { return i >= 0 && i < cheat_item_count() ? &g_items[i] : NULL; }
@@ -88,6 +110,19 @@ static bool contains_ci(const char *hay, const char *needle) {
     }
     return !n;
 }
+int cheat_mark_count(void) { pthread_once(&g_catalog_once, load_catalog); return g_nmarks; }
+const CheatMark *cheat_mark(int i) { return i >= 0 && i < cheat_mark_count() ? &g_marks[i] : NULL; }
+static volatile uint64_t g_marks_wanted;  // the tick count until which the map wants fresh flags
+static volatile uint64_t g_ticks;         // game ticks seen (cheatstate)
+void cheat_marks_want(void) { g_marks_wanted = g_ticks + 120; }
+bool cheat_link_position(float p[3]) {
+    if (!g_site.player_info) return false;
+    uint64_t pi = *(volatile uint64_t *)(uintptr_t)g_site.player_info;
+    if (!pi) return false;
+    for (int i = 0; i < 3; i++) p[i] = *(volatile float *)(uintptr_t)(pi + 0x88 + 4 * i);
+    return p[0] != 0 || p[2] != 0;
+}
+
 const CheatItem *cheat_item_find(const char *q) {
     for (int i = 0; i < cheat_item_count(); i++)
         if (!strcmp(g_items[i].actor, q) || !strcasecmp(g_items[i].name, q)) return &g_items[i];
@@ -104,7 +139,7 @@ const CheatPlace *cheat_place_find(const char *q) {
 }
 
 // ---- state
-enum { R_GIVE, R_RUPEES_ADD, R_RUPEES_SET, R_WARP, R_FLAG };
+enum { R_GIVE, R_RUPEES_ADD, R_RUPEES_SET, R_WARP, R_FLAG, R_FLAG_GET };
 typedef struct { int kind; char name[96]; int a, b; float x, y, z; } Request;
 #define QMAX 32
 static pthread_mutex_t g_lock = PTHREAD_MUTEX_INITIALIZER;
@@ -113,6 +148,8 @@ static int g_head, g_count;
 static char g_status[160] = "Ready.";
 static volatile int g_rupees = -1;
 static int g_supported = -1;  // -1 unchecked
+static char g_query[200];
+static volatile int g_query_done;
 
 static void set_status(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
 static void set_status(const char *fmt, ...) {
@@ -220,6 +257,23 @@ static bool gdt_get_s32(const char *name, int *out) {
     frame_end(&f);
     return ok;
 }
+static bool gdt_get_bool(const char *name, bool *out) {
+    uint64_t mgr = gdt_mgr();
+    if (!mgr || !rd64(mgr + 0xbe0) || !rd64(rd64(mgr + 0xbe0))) return false;
+    Frame f;
+    if (!frame_begin(&f, name)) return false;
+    Cpu *c = f.c;
+    c->x[0] = rd64(rd64(mgr + 0xbe0));
+    c->x[1] = f.base + 0x70;
+    c->x[2] = f.base + 0x80;
+    c->x[3] = *(volatile uint8_t *)(uintptr_t)(mgr + 0xbe8);
+    c->x[4] = 1;
+    guest_call(c, FN_TP_GET_BOOL);
+    bool ok = c->x[0] & 1;
+    *out = *(volatile uint8_t *)(uintptr_t)(f.base + 0x70) & 1;
+    frame_end(&f);
+    return ok;
+}
 static bool gdt_add_s32(const char *name, int delta) {
     if (!gdt_mgr()) return false;
     Frame f;
@@ -254,6 +308,14 @@ static bool gdt_set_s32(const char *name, int value) {
 static uint32_t pouch_count(void) {  // PauseMenuDataMgr's item list (+0x68: OffsetList; +0x78 its count)
     uint64_t p = rd64(GOT_POUCH_MGR), mgr = p ? rd64(p) : 0;
     return mgr ? rd32(mgr + 0x78) : 0;
+}
+
+// "s:Name" (s32, true when > 0) or "b:Name" (bool); -1 when unreadable or empty
+static int flag_eval(const char *spec) {
+    if (!spec || strlen(spec) < 3) return -1;
+    if (spec[0] == 's') { int v; return gdt_get_s32(spec + 2, &v) ? v > 0 : -1; }
+    bool b;
+    return gdt_get_bool(spec + 2, &b) ? b : -1;
 }
 
 static const CheatItem *item_by_actor(const char *actor) {
@@ -303,6 +365,14 @@ static void run(const Request *r) {
         set_status("Rupees: %d -> %lld.", cur, v);
         break;
     }
+    case R_FLAG_GET: {
+        int v; bool b;
+        if (gdt_get_s32(r->name, &v)) snprintf(g_query, sizeof g_query, "%s = %d (s32)", r->name, v);
+        else if (gdt_get_bool(r->name, &b)) snprintf(g_query, sizeof g_query, "%s = %s (bool)", r->name, b ? "true" : "false");
+        else snprintf(g_query, sizeof g_query, "%s: no such s32 or bool flag", r->name);
+        g_query_done = 1;
+        break;
+    }
     case R_FLAG:
         set_status(gdt_set_s32(r->name, r->a) ? "Set %s = %d." : "Could not set %s = %d.", r->name, r->a);
         break;
@@ -318,7 +388,6 @@ static void run(const Request *r) {
 }
 
 static int g_why = 1;            // the last reason the game tick skipped (cheatstate)
-static volatile uint64_t g_ticks;  // game ticks seen (cheatstate)
 
 // Take the next request of the kind this thread runs: warps on the presenting thread (the teleport's own state
 // machine lives there), everything else on the game thread.
@@ -330,11 +399,47 @@ static bool take(bool warp, Request *out) {
     return have;
 }
 
+// Which shrine Link is in, guessed (no flag says so until the game saves): he was by a shrine's entrance moments
+// before, then his position jumped far, to somewhere no map marker is (a shrine's own stage). Coming back out puts
+// him by the entrance again, which ends the guess. Warps and fast travel land on a marker, so they do not count.
+static int g_inside = -1, g_near_shrine = -1;
+static uint64_t g_near_frame;
+static float g_last[3];
+static bool g_have_last;
+int cheat_inside_shrine(void) { return g_inside; }
+static float dist2(const CheatMark *m, const float p[3]) {
+    float dx = m->x - p[0], dz = m->z - p[2];
+    return dx * dx + dz * dz;
+}
+static void track_shrine(uint64_t frame) {
+    float p[3];
+    if (!cheat_link_position(p) || !cheat_mark_count()) return;
+    int near = -1;
+    float best = 1e30f, any = 1e30f;
+    for (int i = 0; i < g_nmarks; i++) {
+        if (g_marks[i].kind[0] == 'l') continue;  // (labels)
+        float d = dist2(&g_marks[i], p);
+        if (d < any) any = d;
+        if (g_marks[i].kind[0] == 's' && d < best) { best = d; near = i; }
+    }
+    if (near >= 0 && best < 40 * 40) { g_near_shrine = near; g_near_frame = frame; }
+    if (g_have_last) {
+        float dx = p[0] - g_last[0], dz = p[2] - g_last[2];
+        if (dx * dx + dz * dz > 300 * 300) {
+            g_inside = g_near_shrine >= 0 && frame - g_near_frame < 900 && any > 150 * 150 ? g_near_shrine : -1;
+            g_near_shrine = -1;
+        }
+    }
+    memcpy(g_last, p, sizeof g_last);
+    g_have_last = true;
+}
+
 // Presenting thread, once per presented frame.
 void cheats_frame(uint64_t frame) {
-    (void)frame;
     Request r;
-    if (cheats_supported() && cheats_world_ready() && take(true, &r)) run(&r);
+    if (!cheats_supported() || !cheats_world_ready()) return;
+    track_shrine(frame);
+    if (take(true, &r)) { g_near_shrine = -1; run(&r); }
 }
 
 // Game thread: the cameras' controller reads its flags once a frame (tools/patches.py _cam_reverse, hle/input.c
@@ -349,6 +454,14 @@ void cheats_game_tick(void) {
         int v;
         if (gdt_get_s32("CurrentRupee", &v)) g_rupees = v;
     }
+    if (g_ticks < g_marks_wanted && cheat_mark_count()) {  // the map is up: re-read 24 markers a tick
+        static int next;
+        for (int k = 0; k < 24; k++, next = (next + 1) % g_nmarks) {
+            CheatMark *m = &g_marks[next];
+            m->found = flag_eval(m->found_flag);
+            m->done = flag_eval(m->done_flag);
+        }
+    }
     Request r;  // one request per tick, so a batch of gifts never stalls a frame
     if (take(false, &r)) run(&r);
 }
@@ -356,6 +469,7 @@ void cheats_game_tick(void) {
 // ---- console commands (player safe: they only change the player's own game)
 static void reply_queued(ControlReply *rep, bool ok, const char *what) {
     if (!ok) { control_fail(rep, "Queue full or invalid request"); return; }
+    control_field_str(rep, "queued", what);
     control_text(rep, "%s%s", what, cheats_world_ready() ? "" : " (runs when you are back in the game)");
 }
 static void cmd_give(int argc, char **argv, ControlReply *rep) {
@@ -407,6 +521,24 @@ static void cmd_cheatstate(int argc, char **argv, ControlReply *rep) {
     char st[160]; cheat_status(st, sizeof st); control_field_str(rep, "status", st);
 }
 
+static void cmd_flag(int argc, char **argv, ControlReply *rep) {
+    if (argc < 2 || argc > 3) { control_fail(rep, "Usage: flag <game data name> [s32 value]"); return; }
+    if (argc == 3) {
+        char *e; long v = strtol(argv[2], &e, 10);
+        if (*e) { control_fail(rep, "Not a number: %s", argv[2]); return; }
+        if (!cheat_flag_s32_set(argv[1], (int)v)) control_fail(rep, "Queue full");
+        else control_text(rep, "Setting %s = %ld", argv[1], v);
+        return;
+    }
+    Request r = {R_FLAG_GET};
+    snprintf(r.name, sizeof r.name, "%s", argv[1]);
+    g_query_done = 0;
+    if (!push(&r)) { control_fail(rep, "Queue full"); return; }
+    for (int i = 0; i < 50 && !g_query_done; i++) SDL_Delay(4);  // (the game thread answers within a frame or two)
+    if (g_query_done) { control_field_str(rep, "flag", g_query); control_text(rep, "%s", g_query); }
+    else control_fail(rep, "No answer: is a game loaded and unpaused?");
+}
+
 void menu_cheat_panel_open(void);  // runtime/ui/menu.mm
 static void cmd_cheatmenu(int argc, char **argv, ControlReply *rep) {
     (void)argc; (void)argv;
@@ -419,6 +551,7 @@ void cheats_init(void) {
         {"give", "<item> [count]", "Add an item to the inventory (local cheat)", cmd_give, CONTROL_PLAYER},
         {"rupees", "[n | +n | -n | max]", "Show or change rupees (local cheat)", cmd_rupees, CONTROL_PLAYER},
         {"warp", "<place>", "Warp to a shrine, tower, town or stable (local cheat)", cmd_warp, CONTROL_PLAYER},
+        {"flag", "<name> [value]", "Read a game data flag, or set an s32 one (local cheat)", cmd_flag, CONTROL_PLAYER},
         {"cheatmenu", "", "Open the cheat panel (also F9, or L3 + R3)", cmd_cheatmenu, CONTROL_PLAYER},
         {"cheatstate", "", "Why queued cheats are waiting (local cheat)", cmd_cheatstate, CONTROL_PLAYER},
     };

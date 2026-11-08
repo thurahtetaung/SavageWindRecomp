@@ -92,7 +92,7 @@ def main(root, out):
     static = f.byml(open(static_path, 'rb').read()) if static_path and os.path.exists(static_path) \
         else f.byml(boot['Map/MainField/Static.smubin'])
     start = {s['PosName']: s for s in static.get('StartPos', []) if 'PosName' in s}
-    loc = {}
+    loc = {}  # LocationMarker and Dungeon messages (also names the map areas)
     for k in ('StaticMsg/LocationMarker.msbt', 'StaticMsg/Dungeon.msbt'):
         loc.update(f.msbt(msg[k]))
     places = []
@@ -115,7 +115,45 @@ def main(root, out):
     with open(os.path.join(out, 'places.tsv'), 'w', encoding='utf-8', newline='\n') as fp:
         for p in places:
             fp.write(f'{p[0]}\t{p[1]}\t{p[2]:.2f}\t{p[3]:.2f}\t{p[4]:.2f}\t{p[5]:.1f}\n')
-    print(f'{len(rows)} items, {len(places)} places ({sum(p[6] for p in places)} with a warp point) -> {out}')
+    marks = map_markers(static, start, boot, loc)
+    with open(os.path.join(out, 'map.tsv'), 'w', encoding='utf-8', newline='\n') as fp:
+        for m in marks:
+            fp.write('\t'.join(str(x) if not isinstance(x, float) else f'{x:.1f}' for x in m) + '\n')
+    print(f'{len(rows)} items, {len(places)} places ({sum(p[6] for p in places)} with a warp point), '
+          f'{len(marks)} map markers -> {out}')
+
+
+def map_markers(static, start, boot, msg):
+    """kind, name, x, y, z, found flag, done flag  (flags: "s:<s32 name>" true when > 0, "b:<bool name>", or "")"""
+    out = []
+    areas = []  # named areas (map labels, and the names of Korok spots)
+    for a in f.byml(boot['Map/MainField/Location.smubin']):
+        name = clean(msg.get(a.get('MessageID', ''), ''))
+        if name:
+            t = a['Translate']
+            areas.append((name, t['X'], t['Z'], a.get('ShowLevel', 0)))
+            out.append(('label', name, t['X'], float(a.get('ShowLevel', 0)), t['Z'], '', ''))
+    beasts = {'RemainsWind': 'Clear_RemainsWind', 'RemainsWater': 'Clear_RemainsWater',
+              'RemainsFire': 'Clear_RemainsFire', 'RemainsElectric': 'Clear_RemainsElectric'}
+    for m in static['LocationMarker']:
+        icon, mid = m.get('Icon'), m.get('MessageID', '')
+        name = clean(msg.get(mid, ''))
+        dest = start.get(m.get('WarpDestPosName', ''))
+        t = (dest or m)['Translate']
+        if icon == 'Dungeon' and name:
+            out.append(('shrine', name, t['X'], t['Y'], t['Z'], f's:Location_{mid}', f'b:Clear_{mid}'))
+        elif icon == 'Tower' and name:
+            n = mid[-2:]
+            out.append(('tower', name, t['X'], t['Y'], t['Z'], f's:{m.get("SaveFlag", "")}', f's:MapTower_{n}_OpenScaleLevel'))
+        elif icon in beasts and name:
+            out.append(('beast', name, t['X'], t['Y'], t['Z'], f's:{m.get("SaveFlag", "")}', f'b:{beasts[icon]}'))
+    for k in static.get('KorokLocation', []):
+        t = k['Translate']
+        near = min(areas, key=lambda a: (a[1] - t['X']) ** 2 + (a[2] - t['Z']) ** 2)[0] if areas else ''
+        kind = k.get('PlacementType', '')
+        out.append(('korok', f'Korok Seed near {near}' + (f' ({kind.lower()})' if kind else ''),
+                    t['X'], t['Y'], t['Z'], '', f'b:{k["Flag"]}'))
+    return out
 
 
 if __name__ == '__main__':

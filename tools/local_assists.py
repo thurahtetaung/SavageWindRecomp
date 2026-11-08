@@ -52,6 +52,13 @@ def food_inventory(module, address):
             f'if (rt_local_food_item(LD32(c->x[24] + 0x18ull), LD32(c->x[24] + 0x1cull))) goto L_{module.base + 0xd97bc0:x}; }} '
             + module.lift(address).code)
 
+def horse(module, address):
+    # Spurring: ldrsh w8, [x21, #0x3a8]; subs w8, w8, #1; b.lt <no charge>; strh w8, [x21, #0x3a8]. The horse's
+    # live spur count is that s16 (copied into Horse_CurrentChargeNum each frame). Skipping the store keeps the
+    # charge; the spur itself, its speed and recharging are unchanged.
+    return ('{ extern int local_assist_enabled(int); '
+            'if (!local_assist_enabled(5)) ST16(c->x[21] + 0x3a8ull, (uint16_t)c->x[8]); }')
+
 # Original words checked against the locally supplied NSO, not patched Switch code caves.
 SITES = (
     (OFFSET, WORD, emit),
@@ -62,4 +69,5 @@ SITES = (
     (0xd93440, 0xf0007e88, food_item),
     (0xd96310, 0xd102c3ff, food_cooked),
     (0xd97c4c, 0xf0007e68, food_inventory),
+    (0x6b0d2c, 0x790752a8, horse),
 )
