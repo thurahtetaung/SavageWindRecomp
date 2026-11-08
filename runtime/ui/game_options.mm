@@ -263,6 +263,18 @@ void build_items(void) {
     v.push_back(toggle(P_GAMEPLAY, "Infinite stamina (local)", "Experimental: prevents stamina loss. Recovery still works.",
                        [](const Item &) { return local_stamina_enabled(); },
                        [](const Item &, int x) { local_stamina_set(x); }, 0));
+    v.push_back(toggle(P_GAMEPLAY, "Infinite health (local)", "Experimental: protects health decreases. Healing still works.",
+                       [](const Item &) { return local_assist_enabled(LOCAL_HEALTH); },
+                       [](const Item &, int x) { local_assist_set(LOCAL_HEALTH, x); }, 0));
+    v.push_back(toggle(P_GAMEPLAY, "Equipment durability (local)", "Experimental: equipment actors do not lose durability, including enemy weapons.",
+                       [](const Item &) { return local_assist_enabled(LOCAL_DURABILITY); },
+                       [](const Item &, int x) { local_assist_set(LOCAL_DURABILITY, x); }, 0));
+    v.push_back(toggle(P_GAMEPLAY, "Infinite arrows (local)", "Experimental: firing does not consume arrows. Requires arrows in inventory.",
+                       [](const Item &) { return local_assist_enabled(LOCAL_ARROWS); },
+                       [](const Item &, int x) { local_assist_set(LOCAL_ARROWS, x); }, 0));
+    v.push_back(toggle(P_GAMEPLAY, "Infinite food (local)", "Experimental: protects edible inventory items from the verified removal paths.",
+                       [](const Item &) { return local_assist_enabled(LOCAL_FOOD); },
+                       [](const Item &, int x) { local_assist_set(LOCAL_FOOD, x); }, 0));
     v.push_back(button(P_MAIN, "Video", "Screen, resolution and image quality.", "Open", A_PAGE, P_VIDEO));
 #ifndef __APPLE__
     v.push_back(button(P_MAIN, "Colour", "Presets, exposure, contrast, saturation and LUTs.", "Open", A_PAGE, P_COLOUR));

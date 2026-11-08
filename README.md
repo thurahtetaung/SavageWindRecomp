@@ -1,6 +1,6 @@
 # Savage Wind Recomp
 
-> **Local experimental fork:** this branch adds an optional infinite-stamina assist for the verified BOTW 1.9.0 build.
+> **Local experimental fork:** this branch adds optional stamina, health, equipment durability, arrows, and food assists for the verified BOTW 1.9.0 build.
 > See [Local assists: setup, tests, limitations and upstream syncing](docs/LOCAL_ASSISTS.md).
 > This is not an upstream release or a general mod/cheat loader. Game files and generated game code are not included.
 

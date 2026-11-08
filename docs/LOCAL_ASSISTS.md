@@ -1,16 +1,21 @@
-# Local stamina assist
+# Local gameplay assists
 
-This branch preserves a working Windows prototype of an optional infinite-stamina assist. It is a local modification
+This branch preserves a Windows prototype of optional gameplay assists. It is a local modification
 of Savage Wind, not a released upstream feature. The rest of the upstream README and license remain applicable.
 
 ## Scope and status
 
 - Base: upstream commit `bf6146c14c37fee8781a601e5a544b93dff6d75e`.
 - Tested game: BOTW 1.9.0, main build ID `cd57b23fa4bbad65803d9788c01821ee`.
-- Custom version: `0.4.1-alpha.4-local-stamina`.
-- Adds one toggle, off by default: **Options > Gameplay > Infinite stamina (local)**.
-- Prevents reductions of a positive stamina value; recovery and initialization remain possible.
-- Does not add health, durability, item cheats, a cheat-file interpreter, or general mod loading.
+- Custom version: `0.4.1-alpha.4-local-assists`.
+- Adds five independent toggles, off by default, under **Options > Gameplay**.
+- Stamina: prevents decreases while allowing recovery and initialization.
+- Health: protects decreases at two verified player-health stores while allowing healing.
+- Equipment durability: suppresses durability damage for sword, spear, bow, and shield actor names. This also
+  protects enemy equipment; enemy, animal, tree, and player health are not classified as equipment.
+- Arrows: skips the verified arrow-consumption routine. You still need arrows in inventory.
+- Food: protects edible items in the verified inventory removal paths, including the UI Eat path.
+- Does not add horse stamina, a cheat-file interpreter, or general mod loading. BOTW has no TOTK-style battery.
 - Built and tested on Windows with an NVIDIA RTX 5070 Ti Laptop GPU. Other systems are not validated.
 - Keep the normal installation for comparison. Use separate saves while testing; progress is not synchronized.
 
@@ -64,8 +69,9 @@ matching `build/swgame.dll` and `.id`; an unmodified release generator does not 
 
 ## Using the assist
 
-Open the game's Options, choose Gameplay, and toggle **Infinite stamina (local)**. Normal menu persistence saves
-`local_infinite_stamina = 0` or `1` in `savagewind.ini`. Removing the key starts with the default, off.
+Open the game's Options, choose Gameplay, and toggle each assist individually. Normal menu persistence saves
+`local_infinite_stamina`, `local_infinite_health`, `local_infinite_durability`, `local_infinite_arrows`, and
+`local_infinite_food` as `0` or `1` in `savagewind.ini`. An absent key starts with the default, off.
 
 The F12 console also accepts:
 
@@ -73,6 +79,10 @@ The F12 console also accepts:
 assist stamina
 assist stamina on
 assist stamina off
+assist health on
+assist durability on
+assist arrows on
+assist food on
 ```
 
 Console changes apply immediately; use the game menu for normal settings persistence. A normal launch exposes no
@@ -81,17 +91,23 @@ control socket. For local automation only, start with `SAVAGEWIND_CONTROL=<unuse
 
 ## Implementation
 
-`tools/local_assists.py` checks the complete build ID and the expected instruction at the stamina setter before
-installing a patch. A mismatched build, changed instruction, or overlapping patch fails generation. The setter
-stores an incoming float in the player's stamina field; the generated replacement calls `rt_local_stamina`.
+`tools/local_assists.py` checks the complete build ID and every expected instruction before installing any patches.
+A mismatched build, changed instruction, or overlapping patch fails generation. There are eight verified sites:
+one stamina store, two health stores, arrow-consumption entry, equipment-damage load, and three food-removal sites.
+The food UI hook exits through an existing mutex-unlock block before consuming the item; healing is applied by
+the caller and remains functional. Original instructions run when each assist is disabled.
 
 `runtime/local_assists.c` returns the requested bits unchanged while disabled. While enabled, it keeps the old
 value only when both values are finite, the current value is positive, and the requested nonnegative value is
 smaller. Initialization, increases, negative sentinels, and non-finite values pass through. It never invents a
 maximum or scans arbitrary memory. An atomic flag communicates the toggle across runtime threads.
 
-`runtime/local_assists_control.c` registers the console command; `settings.c` loads and writes the setting;
-`ui/game_options.mm` adds the gameplay row. `tools/gen.py` installs the verified patch, and the Makefile includes
+Health uses a separate integer helper. Equipment checks the actor name through the verified BaseProc layout,
+instead of applying the public cheat's broad life/damage suppression to all actors. Food checks item type and
+use classification, protecting edible inventory entries without classifying key items or equipment as food.
+
+`runtime/local_assists_control.c` registers the console command; `settings.c` loads and writes the settings;
+`ui/game_options.mm` adds the gameplay rows. `tools/gen.py` installs the verified patches, and the Makefile includes
 the new patch module in the game-library identity. The custom version label distinguishes this build in logs.
 
 ## Validation and practical limits
@@ -102,8 +118,17 @@ returned when disabled. See [LOCAL_ASSISTS_VALIDATION.md](LOCAL_ASSISTS_VALIDATI
 
 Tests cover the helper's behavior and patch guards. They do not establish that every game mechanic, cutscene,
 temporary stamina bonus, swimming state, or climbing action is unaffected. There is no full-playthrough claim.
-This protects the verified stamina setter only. Other game versions intentionally fail to generate.
-Health and durability need independent research and testing; changing their values is not equivalent to stamina.
+Only the verified paths are protected. Other game versions intentionally fail to generate.
+Horse stamina remains unimplemented. Equipment tests cover bow wear; not every melee, shield, elemental, or
+scripted destruction path is established by those checks. Health protection is not a guarantee against every
+scripted death. Food protection may also prevent dropping, selling, or scripted removal through the same paths;
+turn it off for quests or transactions that require consumption. Raw cooking ingredients are not generally protected.
+
+Behavioral reference used during investigation: [zeldaret/botw](https://github.com/zeldaret/botw). No decompiled
+implementation files are included in this fork's local changes; hooks were checked against the supplied 1.9.0 NSO.
+The [Gamerjin cheat discussion](https://gbatemp.net/threads/the-legend-of-zelda-breath-of-the-wild-tid-01007ef00011e000-bid-de0b6ac4efc1dda7.673121/)
+provided candidate health, stamina, arrow, and durability sites. This implementation uses verified native hooks,
+not the discussion's broad durability code cave.
 
 ## Keeping the fork synchronized
 
@@ -131,7 +156,7 @@ including its requirement to target the upstream `test` branch.
 
 ## Rollback and troubleshooting
 
-- Toggle the assist off to restore the original stamina-store behavior without restarting.
+- Toggle each assist off to restore its original behavior without restarting.
 - Use the normal game's shortcut to return to the untouched installed release and its own saves.
 - An undefined `rt_local_stamina` indicates mixed source/runtime/library versions: rebuild both artifacts.
 - A missing DLL indicates MSYS2 is absent or its UCRT64 bin folder is not on this process's PATH.
