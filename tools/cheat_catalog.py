@@ -41,6 +41,29 @@ PLACE_CATEGORIES = [  # LocationMarker icons
 ]
 
 
+def ground_start(start, t, radius=200):
+    """A ground start point near a map marker (a marker's own height is its icon's). Warping into the air leaves the
+    game stuck loading, so cutscene, sky, battle and escape points are skipped: a goddess statue first, then a shrine's
+    own warp point, then any other start point, nearest first."""
+    bad = ('Demo', 'Sky', 'Battle', 'Escape', 'Fall', 'Clear_', 'Glide', 'Retire', 'Restart', 'Failed')
+    near = []
+    for s in start.values():
+        d = (s['Translate']['X'] - t['X']) ** 2 + (s['Translate']['Z'] - t['Z']) ** 2
+        name = s.get('PosName', '')
+        if d > radius ** 2 or any(b in name for b in bad):
+            continue
+        rank = 0 if name.startswith('Goddess') else 1 if name.startswith('StartPos_') else 2
+        near.append((rank, d, s))
+    return min(near, key=lambda r: (r[0], r[1]))[2] if near else None
+
+
+def beast_ground(start, icon):
+    """A Divine Beast's own warp points are on the beast or in the air (warping there leaves the game stuck loading).
+    Use the ground point where its quest starts, in the town beside it (Rito Village, Gerudo Town, Goron City,
+    Zora's Domain)."""
+    return start.get(icon)
+
+
 def first(*paths):
     return next((p for p in paths if os.path.exists(p)), None)
 
@@ -101,13 +124,21 @@ def main(root, out):
         name = clean(loc.get(m.get('MessageID', ''), ''))
         if not cat or not name:
             continue
+        if cat == 'Divine Beasts':
+            if name + ' (nearby town)' in {p[1] for p in places}:
+                continue  # (each beast has two markers)
+            dest = beast_ground(start, m['Icon'])
+            if not dest:
+                continue
+            name += ' (nearby town)'
+            t, yaw = dest['Translate'], dest.get('Rotate', {}).get('Y', 0.0)
+            places.append((cat, name, t['X'], t['Y'], t['Z'], yaw, True))
+            continue
         dest = start.get(m.get('WarpDestPosName', ''))
         if not dest:  # a marker's own height is the icon's, not the ground: use the nearest start position
-            mx, mz = m['Translate']['X'], m['Translate']['Z']
-            near = min(start.values(), key=lambda s: (s['Translate']['X'] - mx) ** 2 + (s['Translate']['Z'] - mz) ** 2)
-            if (near['Translate']['X'] - mx) ** 2 + (near['Translate']['Z'] - mz) ** 2 > 200 ** 2:
+            dest = ground_start(start, m['Translate'])
+            if not dest:
                 continue
-            dest = near
         t, yaw = dest['Translate'], dest.get('Rotate', {}).get('Y', 0.0)
         places.append((cat, name, t['X'], t['Y'], t['Z'], yaw, 'WarpDestPosName' in m))
     porder = {c: i for i, (c, _) in enumerate(PLACE_CATEGORIES)}
@@ -115,12 +146,58 @@ def main(root, out):
     with open(os.path.join(out, 'places.tsv'), 'w', encoding='utf-8', newline='\n') as fp:
         for p in places:
             fp.write(f'{p[0]}\t{p[1]}\t{p[2]:.2f}\t{p[3]:.2f}\t{p[4]:.2f}\t{p[5]:.1f}\n')
+    import glob
+    packs = sorted(glob.glob(os.path.join(romfs, 'Pack', 'Dungeon*.pack')))
+    if dlc:
+        packs += sorted(glob.glob(os.path.join(dlc, 'Pack', 'Dungeon*.pack')))
+    shrines = shrine_points(packs, {k: clean(v) for k, v in loc.items() if k.startswith('Dungeon') and '_' not in k})
+    with open(os.path.join(out, 'shrines.tsv'), 'w', encoding='utf-8', newline='\n') as fp:
+        for r in shrines:
+            fp.write('\t'.join(f'{x:.2f}' if isinstance(x, float) else str(x) for x in r) + '\n')
     marks = map_markers(static, start, boot, loc)
     with open(os.path.join(out, 'map.tsv'), 'w', encoding='utf-8', newline='\n') as fp:
         for m in marks:
             fp.write('\t'.join(str(x) if not isinstance(x, float) else f'{x:.1f}' for x in m) + '\n')
     print(f'{len(rows)} items, {len(places)} places ({sum(p[6] for p in places)} with a warp point), '
-          f'{len(marks)} map markers -> {out}')
+          f'{len(marks)} map markers, {len(shrines)} shrine interiors -> {out}')
+
+
+def _xyz(t):
+    return (t[0], t[1], t[2]) if isinstance(t, list) else (t['X'], t['Y'], t['Z'])
+
+
+def shrine_points(packs, names):
+    """Per shrine stage: where its end is (in front of the monk), its entrance, and its treasure chests."""
+    import math
+    rows = []
+    for path in packs:
+        sid = os.path.basename(path)[:-5]  # DungeonNNN
+        try:
+            p = f.sarc(open(path, 'rb').read())
+        except (OSError, ValueError):
+            continue
+        objs = []
+        for k, v in p.items():
+            if k.endswith('_Static.smubin') or k.endswith('_Dynamic.smubin'):
+                objs += f.byml(v).get('Objs', [])
+        by = lambda pre: [o for o in objs if o.get('UnitConfigName', '').startswith(pre) and 'Translate' in o]
+        monk = by('Npc_DungeonPriest')
+        if not monk:
+            continue
+        exit_ = by('DgnObj_GoalExit')
+        if exit_:
+            goal = _xyz(exit_[0]['Translate'])
+        else:  # 3 m in front of the monk, along its facing
+            mx, my, mz = _xyz(monk[0]['Translate'])
+            r = monk[0].get('Rotate', 0.0)
+            ry = r[1] if isinstance(r, list) else r if isinstance(r, float) else 0.0
+            goal = (mx + 3 * math.sin(ry), my, mz + 3 * math.cos(ry))
+        ent = by('DgnObj_EntranceElevator') or by('DgnObj_Hrl_Warpin') or by('DgnObj_Warpin')
+        entrance = _xyz(ent[0]['Translate']) if ent else goal
+        chests = ';'.join('%.1f,%.1f,%.1f' % _xyz(o['Translate']) for o in by('TBox_'))
+        name = names.get(sid, sid)
+        rows.append((sid, name, *goal, *entrance, chests))
+    return rows
 
 
 def map_markers(static, start, boot, msg):
@@ -145,7 +222,9 @@ def map_markers(static, start, boot, msg):
         elif icon == 'Tower' and name:
             n = mid[-2:]
             out.append(('tower', name, t['X'], t['Y'], t['Z'], f's:{m.get("SaveFlag", "")}', f's:MapTower_{n}_OpenScaleLevel'))
-        elif icon in beasts and name:
+        elif icon in beasts and name and not any(o[0] == 'beast' and o[1] == name for o in out):
+            g = beast_ground(start, icon)  # (drawn and warped to at the ground point beside it)
+            t = g['Translate'] if g else t
             out.append(('beast', name, t['X'], t['Y'], t['Z'], f's:{m.get("SaveFlag", "")}', f'b:{beasts[icon]}'))
     for k in static.get('KorokLocation', []):
         t = k['Translate']

@@ -28,6 +28,10 @@
 #define FN_GDT_SET_S32 0x7000d34b30ull
 #define FN_TP_GET_S32 0x7001137684ull
 #define FN_TP_GET_BOOL 0x70011375ecull
+#define FN_GDT_SET_VEC3 0x7000d35530ull   // (const sead::Vector3f *value, handle, debug)
+#define FN_GDT_SET_F32 0x7000d35630ull    // (handle, float value in s0, debug)
+#define H_WARPDLC_POS 0x7001da6f44ull     // flag handles cached at start-up (WarpDLC_DestPos / _DestDegree)
+#define H_WARPDLC_DEG 0x7001da6f40ull
 
 static const struct { uint64_t addr; uint32_t word; } k_guard[] = {
     {FN_ITEM_GET, 0xd10243ff},     // sub sp, sp, #0x90
@@ -35,6 +39,10 @@ static const struct { uint64_t addr; uint32_t word; } k_guard[] = {
     {FN_TP_GET_S32, 0xa9bd7bfd},   // stp x29, x30, [sp, #-0x30]!
     {FN_TP_GET_BOOL, 0xa9bd7bfd},  // stp x29, x30, [sp, #-0x30]!
     {0x700061f794, 0x396fa123},    // ldrb w3, [x9, #0xbe8]   (the bool getter's permission byte)
+    {FN_GDT_SET_VEC3, 0xd10103ff}, // sub sp, sp, #0x40
+    {FN_GDT_SET_F32, 0xd10103ff},  // sub sp, sp, #0x40
+    {0x7000d38a38, 0xb94f4501},    // ldr w1, [x8, #0xf44]    (setWarpDLC_DestPos's handle)
+    {0x7000d389e8, 0xb94f4100},    // ldr w0, [x8, #0xf40]    (setWarpDLC_DestDegree's handle)
     {0x7000b4f9a8, 0x396f2103},    // ldrb w3, [x8, #0xbc8]   (the getter's permission byte)
     {0x7000b4f9b0, 0xf945e109},    // ldr x9, [x8, #0xbc0]    (the getter's TriggerParam)
 };
@@ -47,6 +55,8 @@ static CheatItem *g_items;
 static int g_nitems;
 static CheatPlace *g_places;
 static int g_nplaces;
+static CheatShrine *g_shrines;
+static int g_nshrines;
 static CheatMark *g_marks;
 static int g_nmarks;
 static pthread_once_t g_catalog_once = PTHREAD_ONCE_INIT;
@@ -94,7 +104,27 @@ static void load_catalog(void) {
         if (*m->kind) g_nmarks++;
     }
     if (f) fclose(f);
-    LOG("[cheats] catalog: %d items, %d places, %d map markers\n", g_nitems, g_nplaces, g_nmarks);
+    f = fopen("cheats/shrines.tsv", "rb");
+    cap = 0;
+    char big[2048];
+    while (f && fgets(big, sizeof big, f)) {
+        char *p = big;
+        if (g_nshrines == cap) { cap = cap ? cap * 2 : 160; g_shrines = realloc(g_shrines, (size_t)cap * sizeof *g_shrines); }
+        CheatShrine *s = &g_shrines[g_nshrines];
+        memset(s, 0, sizeof *s);
+        s->id = dup_field(&p); s->name = dup_field(&p);
+        float v[6];
+        int k = 0;
+        for (; k < 6; k++) { char *t = dup_field(&p); v[k] = (float)atof(t); free(t); }
+        memcpy(s->end, v, sizeof s->end); memcpy(s->entrance, v + 3, sizeof s->entrance);
+        char *chests = dup_field(&p);
+        for (char *c = strtok(chests, ";"); c && s->nchest < 8; c = strtok(NULL, ";"))
+            if (sscanf(c, "%f,%f,%f", &s->chest[s->nchest][0], &s->chest[s->nchest][1], &s->chest[s->nchest][2]) == 3) s->nchest++;
+        free(chests);
+        if (*s->id) g_nshrines++;
+    }
+    if (f) fclose(f);
+    LOG("[cheats] catalog: %d items, %d places, %d map markers, %d shrines\n", g_nitems, g_nplaces, g_nmarks, g_nshrines);
 }
 int cheat_item_count(void) { pthread_once(&g_catalog_once, load_catalog); return g_nitems; }
 const CheatItem *cheat_item(int i) { return i >= 0 && i < cheat_item_count() ? &g_items[i] : NULL; }
@@ -139,7 +169,7 @@ const CheatPlace *cheat_place_find(const char *q) {
 }
 
 // ---- state
-enum { R_GIVE, R_RUPEES_ADD, R_RUPEES_SET, R_WARP, R_FLAG, R_FLAG_GET };
+enum { R_GIVE, R_RUPEES_ADD, R_RUPEES_SET, R_WARP, R_FLAG, R_FLAG_GET, R_MEDALLION };
 typedef struct { int kind; char name[96]; int a, b; float x, y, z; } Request;
 #define QMAX 32
 static pthread_mutex_t g_lock = PTHREAD_MUTEX_INITIALIZER;
@@ -211,7 +241,22 @@ bool cheat_give(const char *actor, int value, int count) {
 }
 bool cheat_rupees_add(int delta) { Request r = {R_RUPEES_ADD}; r.a = delta; return push(&r); }
 bool cheat_rupees_set(int value) { Request r = {R_RUPEES_SET}; r.a = value; return push(&r); }
+bool cheat_medallion_set(float x, float y, float z, float yaw) {
+    Request r = {R_MEDALLION}; r.x = x; r.y = y; r.z = z; r.a = (int)(yaw * 100); return push(&r);
+}
 bool cheat_warp(float x, float y, float z) { Request r = {R_WARP}; r.x = x; r.y = y; r.z = z; return push(&r); }
+// A spot that may be off the ground (a Korok on a cliff or in a tree, a tower top): warp to the nearest catalogued
+// ground point first (a place within 1.5 km), then hop the short distance once the world there has loaded.
+bool cheat_warp_spot(float x, float y, float z) {
+    const CheatPlace *best = NULL;
+    float bd = 1500.0f * 1500.0f;
+    for (int i = 0; i < cheat_place_count(); i++) {
+        float dx = g_places[i].x - x, dz = g_places[i].z - z, d = dx * dx + dz * dz;
+        if (d < bd) { bd = d; best = &g_places[i]; }
+    }
+    if (best && bd > 30.0f * 30.0f && !cheat_warp(best->x, best->y, best->z)) return false;
+    return cheat_warp(x, y + 1.5f, z);
+}
 bool cheat_flag_s32_set(const char *name, int value) {
     if (!name || !*name || strlen(name) >= 96) return false;
     Request r = {R_FLAG};
@@ -365,6 +410,31 @@ static void run(const Request *r) {
         set_status("Rupees: %d -> %lld.", cur, v);
         break;
     }
+    case R_MEDALLION: {
+        bool have = false;
+        gdt_get_bool("IsGet_Obj_WarpDLC", &have);
+        Frame f;
+        if (!frame_begin(&f, "")) break;
+        float *v = (float *)(uintptr_t)(f.base + 0x60);
+        v[0] = r->x; v[1] = r->y + 0.3f; v[2] = r->z;
+        f.c->x[0] = f.base + 0x60;
+        f.c->x[1] = rd32(H_WARPDLC_POS);
+        f.c->x[2] = 0;
+        guest_call(f.c, FN_GDT_SET_VEC3);
+        frame_end(&f);
+        if (frame_begin(&f, "")) {
+            float deg = r->a / 100.0f;
+            f.c->x[0] = rd32(H_WARPDLC_DEG);
+            f.c->v[0] = 0;
+            memcpy(&f.c->v[0], &deg, 4);
+            f.c->x[1] = 0;
+            guest_call(f.c, FN_GDT_SET_F32);
+            frame_end(&f);
+        }
+        if (have) set_status("Travel Medallion moved there: open the map, pick the medallion icon and fast travel.");
+        else set_status("Destination set, but you have no Travel Medallion (DLC 1): get it, or use Warp now.");
+        break;
+    }
     case R_FLAG_GET: {
         int v; bool b;
         if (gdt_get_s32(r->name, &v)) snprintf(g_query, sizeof g_query, "%s = %d (s32)", r->name, v);
@@ -407,6 +477,45 @@ static uint64_t g_near_frame;
 static float g_last[3];
 static bool g_have_last;
 int cheat_inside_shrine(void) { return g_inside; }
+
+// The game's current stage: two sead::SafeStrings in main's .bss that the stage getters return (1.9.0
+// 0x7001208304 -> 0x7001dae3a0 type, 0x70012082f8 -> 0x7001dae3d8 name; their text pointer is at +8).
+#define STAGE_TYPE 0x7001dae3a0ull
+#define STAGE_NAME 0x7001dae3d8ull
+static void read_str(uint64_t ss, char *out, int n) {
+    out[0] = 0;
+    uint64_t p = rd64(ss + 8);
+    if (p < 0x7000000000ull || p > 0x7400000000ull) return;
+    int i = 0;
+    for (; i < n - 1; i++) { char ch = *(volatile char *)(uintptr_t)(p + (uint64_t)i); if (!ch || ch < 32 || ch > 126) break; out[i] = ch; }
+    out[i] = 0;
+}
+void cheat_current_stage(char *type, char *name, int n) {
+    if (!cheats_supported() || rd32(0x7001208304) != 0xd0005d20) { type[0] = name[0] = 0; return; }  // adrp x0, 0x7001dae000
+    read_str(STAGE_TYPE, type, n);
+    read_str(STAGE_NAME, name, n);
+}
+const CheatShrine *cheat_current_shrine(void) {
+    char type[32], name[32];
+    cheat_current_stage(type, name, sizeof type);
+    pthread_once(&g_catalog_once, load_catalog);
+    if (!strcmp(type, "CDungeon"))
+        for (int i = 0; i < g_nshrines; i++) if (!strcmp(g_shrines[i].id, name)) return &g_shrines[i];
+    if (!strcmp(type, "MainField")) return NULL;  // (the stage says overworld: no guessing)
+    const CheatMark *m = cheat_mark(g_inside);
+    if (m) for (int i = 0; i < g_nshrines; i++) if (!strcmp(g_shrines[i].name, m->name)) return &g_shrines[i];
+    return NULL;
+}
+bool cheat_shrine_warp(int what) {
+    const CheatShrine *s = cheat_current_shrine();
+    if (!s) { set_status("The shrine solver only works inside a shrine."); return false; }
+    const float *p = what == 0 ? s->end : what == 1 ? s->entrance : what - 2 < s->nchest ? s->chest[what - 2] : NULL;
+    if (!p) return false;
+    // a little above the floor point, and beside a chest rather than inside it
+    float x = p[0] + (what >= 2 ? 1.5f : 0), y = p[1] + 0.6f, z = p[2];
+    set_status(what == 0 ? "Warping to the end of %s: talk to the monk." : "Warping inside %s.", s->name);
+    return cheat_warp(x, y, z);
+}
 static float dist2(const CheatMark *m, const float p[3]) {
     float dx = m->x - p[0], dz = m->z - p[2];
     return dx * dx + dz * dz;
@@ -439,7 +548,11 @@ void cheats_frame(uint64_t frame) {
     Request r;
     if (!cheats_supported() || !cheats_world_ready()) return;
     track_shrine(frame);
-    if (take(true, &r)) { g_near_shrine = -1; run(&r); }
+    // A warp at a time: the next one waits for the last to finish and the world to stream in (about 2 s), so a
+    // two-step warp (ground point first, then a cliff or tree spot) lands on loaded ground.
+    static uint64_t last_warp;
+    if (frame - last_warp < 120) return;
+    if (take(true, &r)) { g_near_shrine = -1; last_warp = frame; run(&r); }
 }
 
 // Game thread: the cameras' controller reads its flags once a frame (tools/patches.py _cam_reverse, hle/input.c
@@ -539,6 +652,32 @@ static void cmd_flag(int argc, char **argv, ControlReply *rep) {
     else control_fail(rep, "No answer: is a game loaded and unpaused?");
 }
 
+static void cmd_medallion(int argc, char **argv, ControlReply *rep) {
+    if (argc < 2) { control_fail(rep, "Usage: medallion <place>  (moves the Travel Medallion there; then fast travel to it)"); return; }
+    char q[160] = "";
+    for (int i = 1; i < argc; i++) { if (i > 1) strncat(q, " ", sizeof q - strlen(q) - 1); strncat(q, argv[i], sizeof q - strlen(q) - 1); }
+    const CheatPlace *p = cheat_place_find(q);
+    if (!p) { control_fail(rep, "No place matches \"%s\"", q); return; }
+    char what[200];
+    snprintf(what, sizeof what, "Travel Medallion to %s", p->name);
+    reply_queued(rep, cheat_medallion_set(p->x, p->y, p->z, p->yaw), what);
+}
+
+static void cmd_shrine(int argc, char **argv, ControlReply *rep) {
+    const CheatShrine *s = cheat_current_shrine();
+    char type[32], name[32];
+    cheat_current_stage(type, name, sizeof type);
+    control_field_str(rep, "stage", type);
+    control_field_str(rep, "map", name);
+    if (!s) { control_fail(rep, "Not inside a shrine (stage %s/%s)", type, name); return; }
+    control_field_str(rep, "shrine", s->name);
+    if (argc < 2) { control_text(rep, "In %s (%d chests). Use: shrine end | entrance | chest <n>", s->name, s->nchest); return; }
+    int what = !strcmp(argv[1], "end") ? 0 : !strcmp(argv[1], "entrance") ? 1 :
+               !strcmp(argv[1], "chest") && argc == 3 ? 1 + atoi(argv[2]) : -1;
+    if (what < 0 || !cheat_shrine_warp(what)) { control_fail(rep, "Usage: shrine end | entrance | chest <1-%d>", s->nchest); return; }
+    control_text(rep, "Warping in %s", s->name);
+}
+
 void menu_cheat_panel_open(void);  // runtime/ui/menu.mm
 static void cmd_cheatmenu(int argc, char **argv, ControlReply *rep) {
     (void)argc; (void)argv;
@@ -551,6 +690,8 @@ void cheats_init(void) {
         {"give", "<item> [count]", "Add an item to the inventory (local cheat)", cmd_give, CONTROL_PLAYER},
         {"rupees", "[n | +n | -n | max]", "Show or change rupees (local cheat)", cmd_rupees, CONTROL_PLAYER},
         {"warp", "<place>", "Warp to a shrine, tower, town or stable (local cheat)", cmd_warp, CONTROL_PLAYER},
+        {"medallion", "<place>", "Move the Travel Medallion to a place, for a proper fast travel there (local cheat)", cmd_medallion, CONTROL_PLAYER},
+        {"shrine", "[end | entrance | chest <n>]", "Shrine solver: warp to the end of the shrine you are in", cmd_shrine, CONTROL_PLAYER},
         {"flag", "<name> [value]", "Read a game data flag, or set an s32 one (local cheat)", cmd_flag, CONTROL_PLAYER},
         {"cheatmenu", "", "Open the cheat panel (also F9, or L3 + R3)", cmd_cheatmenu, CONTROL_PLAYER},
         {"cheatstate", "", "Why queued cheats are waiting (local cheat)", cmd_cheatstate, CONTROL_PLAYER},

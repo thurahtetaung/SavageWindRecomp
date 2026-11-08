@@ -203,7 +203,12 @@ void cheat_tab_map(float scale) {
     if (ImGui::Button("Whole map")) { g_cx = g_cz = 0; g_zoom = 1; }
     ImGui::BeginDisabled(!sel);
     ImGui::SameLine();
-    if (ImGui::Button("Warp here") && sel) cheat_warp(sel->x, sel->y + (sel->kind[0] == 'k' ? 1.5f : 0.5f), sel->z);
+    if (ImGui::Button("Warp here") && sel) {
+        if (sel->kind[0] == 'k' || sel->kind[0] == 't') cheat_warp_spot(sel->x, sel->y, sel->z);  // (may be off the ground)
+        else cheat_warp(sel->x, sel->y + 0.5f, sel->z);
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Via medallion") && sel) cheat_medallion_set(sel->x, sel->y + (sel->kind[0] == 'k' ? 1.0f : 0), sel->z, 0);
     ImGui::SameLine();
     if (ImGui::Button("Guide") && sel) cheat_guide_show(sel->name, hint_of(sel));
     ImGui::EndDisabled();
@@ -369,4 +374,89 @@ void cheat_tab_guide(float scale, bool first_time) {
     if (ImGui::Button("Zelda Dungeon")) { char u[300]; wiki_url(1, u, sizeof u); SDL_OpenURL(u); }
     ImGui::SameLine();
     dim_text("Solutions stay hidden until you ask.");
+}
+
+// ---------------------------------------------------------------- Amiibo
+// Zelda-series figures (8-byte amiibo IDs, from the community AmiiboAPI database) and what BotW gives for them.
+struct Figure { uint64_t id; const char *name, *gives; };
+static const Figure k_figures[] = {
+    {0x01030000024f0902ull, "Midna & Wolf Link", "Wolf Link fights beside you (his hearts are saved on the figure)"},
+    {0x0100000000040002ull, "Link (Super Smash Bros.)", "Epona, plus weapons and materials"},
+    {0x0100000003530902ull, "Link - Archer (Breath of the Wild)", "Bows, arrows and materials"},
+    {0x0100000003540902ull, "Link - Rider (Breath of the Wild)", "Weapons, horse gear chance, materials"},
+    {0x0101000003560902ull, "Zelda (Breath of the Wild)", "Weapons, materials, rare chance"},
+    {0x0140000003550902ull, "Guardian", "Ancient parts and Guardian weapons"},
+    {0x01410000035c0902ull, "Bokoblin", "Monster parts and Bokoblin weapons"},
+    {0x0105000003580902ull, "Daruk", "Champion series drops"},
+    {0x01070000035a0902ull, "Mipha", "Champion series drops"},
+    {0x01080000035b0902ull, "Revali", "Champion series drops"},
+    {0x0106000003590902ull, "Urbosa", "Champion series drops"},
+    {0x01000000034f0902ull, "8-Bit Link", "Hero of Hyrule armor pieces, Sword of the Hero (rare)"},
+    {0x01000000034b0902ull, "Link - Ocarina of Time", "Hero of Time armor, Biggoron's Sword (rare)"},
+    {0x01000000034c0902ull, "Link - Majora's Mask", "Fierce Deity armor and sword (rare)"},
+    {0x01000000034d0902ull, "Link - Twilight Princess", "Twilight armor, Sword of the Six Sages (rare)"},
+    {0x01000000034e0902ull, "Link - Skyward Sword", "Sky armor, Goddess Sword (rare)"},
+    {0x0100010003500902ull, "Toon Link - The Wind Waker", "Wind Waker armor, Sea-Breeze Boomerang (rare)"},
+    {0x0101000003520902ull, "Toon Zelda - The Wind Waker", "Sea-Breeze Shield (rare), materials"},
+    {0x0100000003990902ull, "Link - Link's Awakening", "Materials and food"},
+    {0x01020100001b0002ull, "Ganondorf (Super Smash Bros.)", "Twilight Bow chance, weapons"},
+    {0x0101010000170002ull, "Sheik (Super Smash Bros.)", "Weapons and materials"},
+    {0x0100010000160002ull, "Toon Link (Super Smash Bros.)", "Weapons and materials"},
+    {0x01000000037c0002ull, "Young Link (Super Smash Bros.)", "Weapons and materials"},
+    {0x01010000000e0002ull, "Zelda (Super Smash Bros.)", "Weapons and materials"},
+    {0x0000000000000002ull, "Mario (any other series)", "Random materials, food and rupees"},
+};
+
+extern "C" {
+#include "../services/nfp.h"
+}
+
+void cheat_tab_amiibo(float scale) {
+    static int sel = 0;
+    ImGui::PushTextWrapPos(0);
+    dim_text("A virtual amiibo reader. Pick a figure and press Place on reader, then use the amiibo rune in the game "
+             "(hold L, choose the amiibo rune, press L again). Each scan counts as a new figure, so there is no "
+             "once-a-day limit. Turn amiibo on first: Options > Gameplay > amiibo.");
+    ImGui::PopTextWrapPos();
+    float foot = ImGui::GetFrameHeightWithSpacing() * 2.4f;
+    ImGui::BeginChild("##figs", ImVec2(0, -foot), ImGuiChildFlags_Borders);
+    for (int i = 0; i < (int)(sizeof k_figures / sizeof *k_figures); i++) {
+        ImGui::PushID(i);
+        if (ImGui::Selectable(k_figures[i].name, sel == i, ImGuiSelectableFlags_AllowDoubleClick)) {
+            sel = i;
+            if (ImGui::IsMouseDoubleClicked(0)) nfp_virtual_place(k_figures[i].id);
+        }
+        ImGui::SameLine(ImGui::GetContentRegionAvail().x * 0.45f + ImGui::GetCursorStartPos().x);
+        ImGui::TextColored(k_dim, "%s", k_figures[i].gives);
+        ImGui::PopID();
+    }
+    ImGui::EndChild();
+    char st[96];
+    nfp_virtual_status(st, sizeof st);
+    ImGui::TextColored(k_gold, "%s", k_figures[sel].name);
+    ImGui::SameLine();
+    dim_text(st);
+    if (ImGui::Button("Place on reader", ImVec2(320 * scale, 0))) nfp_virtual_place(k_figures[sel].id);
+    ImGui::SameLine();
+    dim_text("Figure data (like Wolf Link's hearts) is kept in cheats/amiibo/.");
+}
+
+// ---------------------------------------------------------------- Shrine solver (top of the Warp tab)
+void cheat_shrine_box(float scale) {
+    const CheatShrine *s = cheat_current_shrine();
+    ImGui::TextColored(k_gold, "Shrine solver");
+    ImGui::SameLine();
+    if (!s) { dim_text("works only inside a shrine: enter one, then come back here."); return; }
+    ImGui::Text("You're in %s.", s->name);
+    if (ImGui::Button("Warp to the end (monk)", ImVec2(380 * scale, 0))) cheat_shrine_warp(0);
+    ImGui::SameLine();
+    if (ImGui::Button("Back to the entrance")) cheat_shrine_warp(1);
+    for (int i = 0; i < s->nchest; i++) {
+        char b[24];
+        snprintf(b, sizeof b, "Chest %d", i + 1);
+        ImGui::SameLine();
+        if (ImGui::Button(b)) cheat_shrine_warp(2 + i);
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Guide##shrine")) cheat_guide_show(s->name, "shrine");
 }

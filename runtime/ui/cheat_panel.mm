@@ -185,6 +185,8 @@ static void tab_items(float scale) {
 static int g_place_sel = -1, g_place_cat = 0;
 static char g_place_query[96];
 static void tab_warp(float scale) {
+    cheat_shrine_box(scale);
+    ImGui::Separator();
     int n = cheat_place_count();
     if (!n) { hint("No place list yet. Run tools/cheat_catalog.py on your game files and restart."); return; }
     std::vector<const char *> cats{"All"};
@@ -223,13 +225,17 @@ static void tab_warp(float scale) {
     const CheatPlace *sel = cheat_place(g_place_sel);
     if (sel) ImGui::TextColored(k_gold, "%s  (%.0f, %.0f, %.0f)", sel->name, sel->x, sel->y, sel->z);
     else hint("Pick a place.");
-    hint("Overworld only: leave shrines and Divine Beasts first. The warp happens when you close the menus.");
-    ImGui::SameLine(ImGui::GetContentRegionMax().x - 360 * scale);
+    hint("Overworld only; get off your horse first. Far away? Use Via medallion (DLC Travel Medallion) for a proper load.");
+    ImGui::SameLine(ImGui::GetContentRegionMax().x - 620 * scale);
     ImGui::BeginDisabled(!sel);
     if (ImGui::Button("Guide", ImVec2(130 * scale, 0)) && sel)
         cheat_guide_show(sel->name, !strcmp(sel->category, "Shrines") ? "shrine" : "place");
     ImGui::SameLine();
-    if (ImGui::Button("Warp", ImVec2(220 * scale, 0)) || (go_now && sel)) cheat_warp(sel->x, sel->y, sel->z);
+    if (ImGui::Button("Via medallion", ImVec2(230 * scale, 0)) && sel) cheat_medallion_set(sel->x, sel->y, sel->z, sel->yaw);
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Reliable for long trips: moves your Travel Medallion there. \nThen open the map and fast travel to the medallion.");
+    ImGui::SameLine();
+    if (ImGui::Button("Warp now", ImVec2(220 * scale, 0)) || (go_now && sel)) cheat_warp(sel->x, sel->y, sel->z);
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Instant. Very long jumps can leave the game loading forever: \nuse Via medallion for those.");
     ImGui::EndDisabled();
 }
 
@@ -304,6 +310,7 @@ void cheat_panel_draw(ImGuiIO &io, float scale, ImFont *font) {
             guide_opened = true;
             ImGui::EndTabItem();
         }
+        if (ImGui::BeginTabItem("Amiibo", NULL, flags(CHEAT_TAB_AMIIBO))) { cheat_tab_amiibo(scale); ImGui::EndTabItem(); }
         if (ImGui::BeginTabItem("World", NULL, flags(CHEAT_TAB_WORLD))) { tab_world(scale); ImGui::EndTabItem(); }
         ImGui::EndTabBar();
     }

@@ -26,6 +26,11 @@ int cheat_mark_count(void);
 const CheatMark *cheat_mark(int i);   // found / done: 1 yes, 0 no, -1 not read yet
 void cheat_marks_want(void);          // the map is on screen: keep found / done fresh (a few markers per frame)
 bool cheat_link_position(float out[3]);
+typedef struct { const char *id, *name; float end[3], entrance[3]; float chest[8][3]; int nchest; } CheatShrine;
+// The shrine Link is in: from the game's current stage (CDungeon/DungeonNNN), else the guess above; NULL outside.
+const CheatShrine *cheat_current_shrine(void);
+void cheat_current_stage(char *type, char *name, int n);  // the game's current stage ("MainField", "A-1"...)
+bool cheat_shrine_warp(int what);  // 0: the end (in front of the monk), 1: the entrance, 2 + i: chest i
 int cheat_inside_shrine(void);       // map marker index of the shrine Link seems to be in, or -1 (a guess)
 
 
@@ -37,6 +42,10 @@ bool cheat_give(const char *actor, int value, int count);
 bool cheat_rupees_add(int delta);        // clamps to 0..999999
 bool cheat_rupees_set(int value);
 bool cheat_warp(float x, float y, float z);
+bool cheat_warp_spot(float x, float y, float z);
+// The reliable warp: make (x, y, z) the DLC Travel Medallion's destination, so the map's fast travel to the medallion
+// takes Link there with the game's own loading screen. Needs the medallion (DLC 1). Overworld spots only.
+bool cheat_medallion_set(float x, float y, float z, float yaw_deg);  // via the nearest ground point (cliffs, trees, tower tops)
 bool cheat_flag_s32_set(const char *name, int value);
 int cheat_pending(void);
 

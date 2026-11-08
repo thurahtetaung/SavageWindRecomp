@@ -716,11 +716,12 @@ bool install(void) {
         g_entries.push_back(e);
     }
     for (auto &o : g_order) o.clear();
-    // the game's rows: camera and motion aiming ones on Controls; amiibo, the voice language (Language has the voices)
-    // and the VR goggles mode (no use on a PC screen) left out; the rest on Gameplay
+    // the game's rows: camera and motion aiming ones on Controls; the voice language (Language has the voices) and the
+    // VR goggles mode (no use on a PC screen) left out; the rest on Gameplay, amiibo too (local: the cheat panel's
+    // virtual amiibo reader, runtime/services/nfp.c)
     for (uint32_t r = 0; r < rows; r++) {
         uint32_t e = ((const uint32_t *)(uintptr_t)order)[r];
-        if (e == GAME_AMIIBO || e == GAME_VOICE_BUTTON || e == GAME_VOICE_LEVEL || e == GAME_VR) continue;
+        if (e == GAME_VOICE_BUTTON || e == GAME_VOICE_LEVEL || e == GAME_VR) continue;
         bool camera = e == GAME_CAMERA_Y || e == GAME_CAMERA_X || e == GAME_GYRO || e == GAME_CAMERA_SENSITIVITY;
         g_order[camera ? P_CONTROLS : P_GAMEPLAY].push_back(e);
     }
