@@ -78,3 +78,6 @@ void control_console_free(ControlConsoleResult *r);
 int control_console_names(const char *prefix, const char **out, int max);
 // For tests and `report`: run a line now on the calling thread, with the console's rights. Not for other threads.
 void control_exec_line(const char *line, bool console, ControlConsoleResult *out);
+// Run a handler now with a private reply (local cheats); its text into msg. Not for other threads.
+#include <stddef.h>
+bool control_run_fn(ControlFn fn, int argc, char **argv, char *msg, size_t n);

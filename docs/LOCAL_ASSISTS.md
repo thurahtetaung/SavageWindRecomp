@@ -15,7 +15,7 @@ of Savage Wind, not a released upstream feature. The rest of the upstream README
   protects enemy equipment; enemy, animal, tree, and player health are not classified as equipment.
 - Arrows: skips the verified arrow-consumption routine. You still need arrows in inventory.
 - Food: protects edible items in the verified inventory removal paths, including the UI Eat path.
-- Does not add horse stamina, a cheat-file interpreter, or general mod loading. BOTW has no TOTK-style battery.
+- Cheat panel (items, rupees, warps, time): see [CHEATS.md](CHEATS.md). No horse stamina or general mod loading yet.
 - Built and tested on Windows with an NVIDIA RTX 5070 Ti Laptop GPU. Other systems are not validated.
 - Keep the normal installation for comparison. Use separate saves while testing; progress is not synchronized.
 

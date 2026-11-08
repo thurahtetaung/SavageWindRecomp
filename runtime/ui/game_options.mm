@@ -41,6 +41,7 @@ extern "C" {
 void rt_request_reboot(int kind);           // runtime/main.c (1: start the game again)
 void menu_request_window_apply(void);       // menu.mm (fullscreen / window size, applied by the window loop)
 void menu_size_list_open(void);             // menu.mm (Window size's list, over the screen)
+void menu_cheat_panel_open(void);           // menu.mm (the local cheat panel, ui/cheat_panel.mm)
 bool renderer_gpu_rtx(void);                // vulkan/device.c, metal.m
 }
 
@@ -86,7 +87,7 @@ static_assert(sizeof(Entry) == 0x30);
 enum { KIND_TOGGLE = 0, KIND_CHOICE = 1, KIND_BUTTON = 2 };
 
 enum Page { P_MAIN, P_GAMEPLAY, P_VIDEO, P_COLOUR, P_AUDIO, P_CONTROLS, P_KEYS, P_STICKS, P_PAD, P_LANGUAGE, P_COUNT };
-enum Action { A_NONE, A_PAGE, A_BIND_KEY, A_BIND_PAD, A_RESET_KEYS, A_RESET_PAD, A_RESTART, A_QUIT, A_SIZE_LIST };
+enum Action { A_NONE, A_PAGE, A_BIND_KEY, A_BIND_PAD, A_RESET_KEYS, A_RESET_PAD, A_RESTART, A_QUIT, A_SIZE_LIST, A_CHEATS };
 
 struct Item {
     int page;
@@ -275,6 +276,8 @@ void build_items(void) {
     v.push_back(toggle(P_GAMEPLAY, "Infinite food (local)", "Experimental: protects edible inventory items from the verified removal paths.",
                        [](const Item &) { return local_assist_enabled(LOCAL_FOOD); },
                        [](const Item &, int x) { local_assist_set(LOCAL_FOOD, x); }, 0));
+    v.push_back(button(P_MAIN, "Cheats (local)", "Items, rupees, warps, time of day and assists. Also F9, or L3 + R3.",
+                       "Open", A_CHEATS, 0));
     v.push_back(button(P_MAIN, "Video", "Screen, resolution and image quality.", "Open", A_PAGE, P_VIDEO));
 #ifndef __APPLE__
     v.push_back(button(P_MAIN, "Colour", "Presets, exposure, contrast, saturation and LUTs.", "Open", A_PAGE, P_COLOUR));
@@ -981,6 +984,9 @@ extern "C" int rt_opt_decide(uint64_t row) {
         return 2;
     case A_QUIT:
         return 3;
+    case A_CHEATS:
+        menu_cheat_panel_open();
+        return 2;
     }
     return 2;
 }

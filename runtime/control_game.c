@@ -369,6 +369,8 @@ void control_fly_init(void);       // runtime/control_fly.c
 void control_game_init(void) {
     extern void local_assists_init(void);
     local_assists_init();
+    extern void cheats_init(void);
+    cheats_init();
     static const ControlCmd player[] = {
         {"state", "", "Frame number, uptime, fps and hour", cmd_state, CONTROL_PLAYER},
         {"pos", "", "Show the position and copy it as a line for goto or an issue", cmd_pos, CONTROL_PLAYER},

@@ -3,7 +3,8 @@ param(
     [string]$PythonExe,
     [string]$MsysRoot = 'C:\msys64',
     [ValidateRange(1,64)][int]$Jobs = 16,
-    [switch]$SkipGenerate
+    [switch]$SkipGenerate,
+    [string]$GameRoot
 )
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path -Parent $PSScriptRoot
@@ -30,6 +31,10 @@ try {
     Copy-Item -LiteralPath 'third_party\fonts\FiraSans\FiraSans-Medium.ttf','third_party\fonts\FiraSans\FiraSans-SemiBold.ttf' -Destination 'build'
     Copy-Item -LiteralPath 'third_party\fonts\FiraSans\OFL.txt' -Destination 'build\FiraSans-OFL.txt'
     Copy-Item -LiteralPath 'docs\icon\icon_1024.png' -Destination 'build\icon.png'
+    if ($GameRoot) {  # the cheat panel's item and warp lists, from the player's own files (never committed)
+        & $PythonExe 'tools/cheat_catalog.py' $GameRoot 'local-data\cheats'
+        if ($LASTEXITCODE) { throw 'Cheat catalog generation failed' }
+    }
     Write-Host 'Build and tests passed. Add your own game folders to local-data\extracted before launching.'
 } finally {
     $env:SW_LOCAL_BUILD_JOBS = $previousJobs

@@ -527,10 +527,25 @@ int control_console_names(const char *prefix, const char **out, int max) {
     return n;
 }
 
+// Run a handler directly with a private reply (local cheats: the menu's warp reuses the teleport outside developer
+// mode). The reply's text goes to msg; true when it did not fail.
+bool control_run_fn(ControlFn fn, int argc, char **argv, char *msg, size_t n) {
+    ControlReply r = {0};
+    fn(argc, argv, &r);
+    bool ok = !r.failed && !r.data.bad;
+    char *text = reply_lines(&r);
+    if (msg && n) snprintf(msg, n, "%s", text ? text : (r.error ? r.error : ""));
+    free(text);
+    reply_free(&r);
+    return ok;
+}
+
 void control_frame(uint64_t frame) {
     if (!initialized) return;
     control_place_frame();
     if (dev_mode) control_game_frame(frame);
+    else { extern void control_tp_frame(uint64_t); control_tp_frame(frame); }  // (a cheat warp in progress)
+    { extern void cheats_frame(uint64_t); cheats_frame(frame); }
     console_pump();
     if (!queued) return;
     pthread_mutex_lock(&queue_lock);

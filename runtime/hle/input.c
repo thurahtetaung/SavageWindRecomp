@@ -296,6 +296,7 @@ int rt_cam_stick(uint64_t out, uint64_t lr) {
 void rt_cam_reverse(int axis, int on) {
     if (on) cam_reverse |= 1 << axis;
     else cam_reverse &= ~(1 << axis);
+    if (axis == 1) { extern void cheats_game_tick(void); cheats_game_tick(); }  // (local cheats: a game-thread tick)
 }
 
 // tools/patches.py _cam_pitch: the chase-like cameras' vertical part, to be squared (0) or, from the mouse, scaled (1)

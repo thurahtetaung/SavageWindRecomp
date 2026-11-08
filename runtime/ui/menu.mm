@@ -20,6 +20,7 @@
 #include "imgui_internal.h"  // (NavCursorVisible)
 #include "osk.h"
 #include "console.h"
+#include "cheat_panel.h"
 #ifdef __APPLE__
 #include "imgui_impl_metal.h"
 #else
@@ -164,7 +165,7 @@ extern "C" void menu_size_list_open(void) {
     input_reset();
     g_sizes = true;
 }
-static bool capturing() { return g_open.load() || g_kbd.load() == 1 || g_sizes.load() || console_is_open(); }
+static bool capturing() { return g_open.load() || g_kbd.load() == 1 || g_sizes.load() || console_is_open() || cheat_panel_is_open(); }
 // The game gets no input while this is true (runtime/hle/input.c): menu or name entry up, or a binding capture begun
 // from the game's Options screen.
 extern "C" bool menu_input_captured(void) {
@@ -186,6 +187,14 @@ static void set_console(bool open) {
     console_set_open(open);
     input_reset();  // nothing held leaks into the game
 }
+// The cheat panel (cheat_panel.mm): F9, or Minus + R3 on a controller; the game gets no input meanwhile
+static std::atomic<bool> g_cheat_text{false};  // its search field has the keyboard (keys are text)
+static void set_cheats(bool open) {
+    if (open == cheat_panel_is_open()) return;
+    cheat_panel_set_open(open);
+    input_reset();
+}
+extern "C" void menu_cheat_panel_open(void) { set_cheats(true); }
 // Ctrl+V: the system clipboard as typed text (ImGui has a clipboard of its own, which is not the system's). One line,
 // at most 1000 bytes, in pieces that fit a text event, each ending on a whole character.
 static void console_paste(void) {
@@ -234,7 +243,8 @@ bool menu_handle_event(const SDL_Event *e) {
         return true;
     }
     // typing (a text field, the on-screen keyboard, the name entry): keys are text, not menu shortcuts
-    bool typing = g_kbd.load() == 1 || console_is_open() || (g_open.load() && g_text_busy.load());
+    bool typing = g_kbd.load() == 1 || console_is_open() || (g_open.load() && g_text_busy.load()) ||
+                  (cheat_panel_is_open() && g_cheat_text.load());
     if (e->type == SDL_EVENT_KEY_UP && e->key.scancode == SDL_SCANCODE_ESCAPE)
         input_pc_escape(false);
     if (pc_cursor_enabled() && !capturing() && !typing && !game_options_input_hold() &&
@@ -251,6 +261,11 @@ bool menu_handle_event(const SDL_Event *e) {
         if (!e->key.repeat && (e->key.scancode == SDL_SCANCODE_GRAVE || e->key.scancode == SDL_SCANCODE_F12) &&
             !g_open.load() && g_kbd.load() != 1 && !g_sizes.load()) {
             set_console(!console_is_open());
+            return true;
+        }
+        if (!e->key.repeat && e->key.scancode == SDL_SCANCODE_F9 && !g_open.load() && g_kbd.load() != 1 &&
+            !g_sizes.load() && !console_is_open()) {
+            set_cheats(!cheat_panel_is_open());
             return true;
         }
         if (console_is_open()) {
@@ -318,6 +333,13 @@ bool menu_handle_event(const SDL_Event *e) {
         bool down = e->type == SDL_EVENT_GAMEPAD_BUTTON_DOWN;
         if (e->gbutton.button == SDL_GAMEPAD_BUTTON_BACK) back_down = down;
         if (e->gbutton.button == SDL_GAMEPAD_BUTTON_START) start_down = down;
+        static bool l3_down, r3_down;  // L3 + R3 (crouch + scope: harmless in game) opens / closes the cheat panel
+        if (e->gbutton.button == SDL_GAMEPAD_BUTTON_LEFT_STICK) l3_down = down;
+        if (e->gbutton.button == SDL_GAMEPAD_BUTTON_RIGHT_STICK) r3_down = down;
+        if (down && l3_down && r3_down && !typing && !g_open.load() && !console_is_open()) {
+            set_cheats(!cheat_panel_is_open());
+            return true;
+        }
         if (down && !typing && overlay_enabled() &&
             ((back_down && start_down) || e->gbutton.button == SDL_GAMEPAD_BUTTON_GUIDE)) {
             set_open(!g_open.load());
@@ -1416,7 +1438,7 @@ static bool menu_draws(bool *pointer_hover = NULL, float *pointer_box = NULL, bo
     bool gyro_on = pc_gyro_scene_view(gyro ? gyro : &gs);
     if (pointer_hover) *pointer_hover = hover;
     if (gyro_show) *gyro_show = gyro_on;
-    return g_open.load() || g_kbd.load() == 1 || g_sizes.load() || console_is_open() || gyro_on || hover ||
+    return g_open.load() || g_kbd.load() == 1 || g_sizes.load() || console_is_open() || cheat_panel_is_open() || gyro_on || hover ||
            g_settings.perf_overlay != PERF_OFF;
 }
 
@@ -1549,6 +1571,10 @@ void menu_render(void *cmd, uint32_t target_w, uint32_t target_h) {
 
     if (kbd) keyboard_draw(io, scale);
     if (sizes) size_list_draw(io, scale);
+    if (cheat_panel_is_open()) {
+        cheat_panel_draw(io, scale, NULL);
+        g_cheat_text = io.WantTextInput;
+    } else g_cheat_text = false;
     if (con) console_draw(io, scale, g_font_mono ? g_font_mono : g_font);
     ImGui::Render();
     g_text_busy = open && ui_text_busy();
