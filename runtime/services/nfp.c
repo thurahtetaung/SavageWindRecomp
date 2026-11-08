@@ -15,6 +15,7 @@
 #include "../ipc.h"
 #include "../kernel.h"
 #include "../rt.h"
+#include "../platform.h"
 #include "nfp.h"
 
 #define NFP_RESULT(desc) (115u | ((uint32_t)(desc) << 9))
@@ -38,6 +39,8 @@ static uint8_t g_area[APP_AREA_SIZE];
 static uint32_t g_area_id;     // the game's access id for the area (0: none created)
 static bool g_area_open;
 static char g_last[96] = "No figure placed.";
+static bool g_mounted_once;  // the game read the figure in this detection (else it stays on the reader)
+static int g_gen;            // detection generation, for the delayed tap
 
 static void signal_ev(KEvent *ev) {
     if (!ev) return;
@@ -77,21 +80,39 @@ static void save_area(void) {
 static void detect(void) {
     if (!g_placed || g_state != S_SEARCHING) return;
     g_tag = g_placed;
-    g_placed = 0;
+    g_mounted_once = false;
     for (int i = 0; i < 7; i++) g_uid[i] = (uint8_t)(rand() & 0xff);
     g_uid[0] = 0x04;  // (NXP's manufacturer byte, as on real NTAG215 figures)
     load_area(g_tag);
     g_state = S_FOUND;
-    snprintf(g_last, sizeof g_last, "Figure read by the game.");
+    snprintf(g_last, sizeof g_last, "The game found the figure...");
+    LOG("[nfp] t=%llu tap\n", (unsigned long long)(plat_now_ns() / 1000000ull));
     LOG("[nfp] virtual figure %016llx detected\n", (unsigned long long)g_tag);
     signal_ev(g_activate);
+}
+
+// The tap comes a moment after detection starts: the game clears the activate event right after StartDetection and
+// only then waits on it, so a signal sent inside StartDetection itself was lost.
+static void *delayed_tap(void *arg) {
+    int gen = (int)(intptr_t)arg;
+    struct timespec ts = {0, 150 * 1000 * 1000};
+    nanosleep(&ts, NULL);
+    pthread_mutex_lock(&g_lock);
+    if (gen == g_gen) detect();
+    pthread_mutex_unlock(&g_lock);
+    return NULL;
+}
+static void tap_soon(void) {  // (caller holds g_lock)
+    if (!g_placed || g_state != S_SEARCHING) return;
+    pthread_t t;
+    if (!pthread_create(&t, NULL, delayed_tap, (void *)(intptr_t)++g_gen)) pthread_detach(t);
 }
 
 void nfp_virtual_place(uint64_t amiibo_id) {
     pthread_mutex_lock(&g_lock);
     g_placed = amiibo_id;
     snprintf(g_last, sizeof g_last, "Figure on the reader: use the amiibo rune in the game.");
-    detect();  // (the game may already be waiting)
+    tap_soon();  // (the game may already be waiting)
     pthread_mutex_unlock(&g_lock);
 }
 void nfp_virtual_status(char *out, int n) {
@@ -122,13 +143,18 @@ static void nfp_user(Service *s, IpcReq *req, IpcResp *resp) {
         resp_size(resp, 4);
         break;
     }
-    case 3: g_state = S_SEARCHING; detect(); break;                           // StartDetection
+    case 3: g_state = S_SEARCHING; tap_soon(); break;                         // StartDetection
     case 4:                                                                   // StopDetection
         if (g_state == S_FOUND || g_state == S_MOUNTED) signal_ev(g_deactivate);
+        if (g_mounted_once && g_placed == g_tag) {  // read: the figure leaves the reader
+            g_placed = 0;
+            snprintf(g_last, sizeof g_last, "Figure read by the game. Place it again for another scan.");
+        }
+        g_gen++;  // (a pending tap is for this detection only)
         g_state = S_INITIALIZED;
         g_area_open = false;
         break;
-    case 5: if (have) g_state = S_MOUNTED; else resp->result = R_WRONG_STATE; break;     // Mount
+    case 5: if (have) { g_state = S_MOUNTED; g_mounted_once = true; } else resp->result = R_WRONG_STATE; break;  // Mount
     case 6: if (have) g_state = S_FOUND; g_area_open = false; break;                    // Unmount
     case 7: {                                                                 // OpenApplicationArea(access id)
         uint32_t aid = IN(uint32_t, 8);
@@ -210,12 +236,14 @@ static void nfp_user(Service *s, IpcReq *req, IpcResp *resp) {
         put_buf(req, 0, m, sizeof m);
         break;
     }
+    // A fresh event each time: the game attaches, finalizes (closing its handles), initializes and attaches again;
+    // handing back the first handle left it waiting on a closed one, so a found figure was never read.
     case 17:                                                                  // AttachActivateEvent
-        if (!g_activate) g_activate = kernel_create_event_pair(&(uint32_t){0}, &g_activate_r);
+        g_activate = kernel_create_event_pair(&(uint32_t){0}, &g_activate_r);
         resp->copy_handles[resp->ncopy++] = g_activate_r;
         break;
     case 18:                                                                  // AttachDeactivateEvent
-        if (!g_deactivate) g_deactivate = kernel_create_event_pair(&(uint32_t){0}, &g_deactivate_r);
+        g_deactivate = kernel_create_event_pair(&(uint32_t){0}, &g_deactivate_r);
         resp->copy_handles[resp->ncopy++] = g_deactivate_r;
         break;
     case 19: OUT(uint32_t, 0) = g_state == S_FINALIZED ? 0 : 1; resp_size(resp, 4); break;   // GetState
@@ -230,7 +258,18 @@ static void nfp_user(Service *s, IpcReq *req, IpcResp *resp) {
     }
     default: LOG("[nfp] IUser cmd %u (ok)\n", req->cmd);
     }
-    if (req->cmd != 19 && req->cmd != 20) LOG("[nfp] cmd %u -> state %d result %x\n", req->cmd, g_state, resp->result);
+    {   // (all commands, timed: the game's detection loop decides how the reader must behave)
+        static uint32_t last_cmd = 999;
+        static int last_state = -1, repeats;
+        bool poll = req->cmd == 19 || req->cmd == 20;  // (polled about 9 times a second: logged on a change only)
+        if ((poll ? g_state != last_state : req->cmd != last_cmd || g_state != last_state) || ++repeats % 2000 == 0) {
+            LOG("[nfp] t=%llu cmd %u -> state %d result %x\n", (unsigned long long)(plat_now_ns() / 1000000ull), req->cmd,
+                g_state, resp->result);
+            last_cmd = req->cmd;
+            last_state = g_state;
+            repeats = 0;
+        }
+    }
     pthread_mutex_unlock(&g_lock);
 }
 

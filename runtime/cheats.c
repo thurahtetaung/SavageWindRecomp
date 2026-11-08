@@ -741,6 +741,16 @@ static void cmd_medallion(int argc, char **argv, ControlReply *rep) {
     reply_queued(rep, cheat_medallion_set(p->x, p->y, p->z, p->yaw), what);
 }
 
+static void cmd_amiibo(int argc, char **argv, ControlReply *rep) {
+    extern void nfp_virtual_place(uint64_t amiibo_id);
+    if (argc != 2) { control_fail(rep, "Usage: amiibo <16-hex-digit amiibo id | wolf | epona>"); return; }
+    uint64_t id = !strcmp(argv[1], "wolf") ? 0x01030000024f0902ull : !strcmp(argv[1], "epona") ? 0x0100000000040002ull
+                                                                    : strtoull(argv[1], NULL, 16);
+    if (!id) { control_fail(rep, "Not an amiibo id: %s", argv[1]); return; }
+    nfp_virtual_place(id);
+    control_field_str(rep, "placed", argv[1]);
+}
+
 static void cmd_scene(int argc, char **argv, ControlReply *rep) {
     if (argc != 3) { control_fail(rep, "Usage: scene <map, e.g. MainField/D-6> <start position name | WarpIcon>"); return; }
     reply_queued(rep, cheat_scene_change(argv[1], argv[2]), "Scene change");
@@ -788,6 +798,7 @@ void cheats_init(void) {
         {"give", "<item> [count]", "Add an item to the inventory (local cheat)", cmd_give, CONTROL_PLAYER},
         {"rupees", "[n | +n | -n | max]", "Show or change rupees (local cheat)", cmd_rupees, CONTROL_PLAYER},
         {"warp", "<place>", "Warp to a shrine, tower, town or stable (local cheat)", cmd_warp, CONTROL_PLAYER},
+        {"amiibo", "<id | wolf | epona>", "Put a figure on the virtual amiibo reader (local cheat)", cmd_amiibo, CONTROL_PLAYER},
         {"travel", "<place> | <x> <y> <z>", "Fast travel to a place, with the game's own loading screen (local cheat)", cmd_travel, CONTROL_PLAYER},
         {"scene", "<map> <pos>", "Change scene to a named start position (local cheat)", cmd_scene, CONTROL_PLAYER},
         {"medallion", "<place>", "Move the Travel Medallion to a place, for a proper fast travel there (local cheat)", cmd_medallion, CONTROL_PLAYER},
