@@ -31,10 +31,18 @@ uint32_t rt_local_stamina(uint32_t current, uint32_t requested) {
     return requested;
 }
 
+static atomic_int g_health = -1;     // the last stored player health (quarter hearts), -1 before any store
+static atomic_uint g_deaths;          // stores that took Link from above zero to zero (companion apps)
+int local_health_last(void) { return atomic_load_explicit(&g_health, memory_order_relaxed); }
+unsigned local_death_count(void) { return atomic_load_explicit(&g_deaths, memory_order_relaxed); }
+
 uint32_t rt_local_health(uint32_t current, uint32_t requested) {
+    uint32_t result = requested;
     if (local_assist_enabled(LOCAL_HEALTH) && (int32_t)current > 0 &&
-        (int32_t)requested >= 0 && requested < current) return current;
-    return requested;
+        (int32_t)requested >= 0 && requested < current) result = current;
+    if ((int32_t)current > 0 && result == 0) atomic_fetch_add_explicit(&g_deaths, 1, memory_order_relaxed);
+    if ((int32_t)result >= 0) atomic_store_explicit(&g_health, (int)result, memory_order_relaxed);
+    return result;
 }
 
 int rt_local_food_item(uint32_t type, uint32_t use) {

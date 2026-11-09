@@ -12,6 +12,8 @@
 #include "rt.h"
 #include "game_sites.h"
 #include "cheats.h"
+#include "companion.h"
+#include "local_assists.h"
 
 // Read-only companion context. Stage identity is read directly; no proximity guess is exposed.
 static void cmd_adventure(int argc, char **argv, ControlReply *r) {
@@ -23,6 +25,9 @@ static void cmd_adventure(int argc, char **argv, ControlReply *r) {
     control_field_str(r, "stage_type", type);
     control_field_str(r, "stage_name", name);
     control_field_bool(r, "world_ready", cheats_world_ready());
+    int health = local_health_last();
+    if (health >= 0) control_field_int(r, "health_quarters", health);
+    control_field_int(r, "deaths", local_death_count());
     if (!strcmp(type, "CDungeon")) {
         const CheatShrine *shrine = cheat_current_shrine();
         if (shrine && !strcmp(shrine->id, name)) {
@@ -391,6 +396,7 @@ void control_game_init(void) {
     local_assists_init();
     extern void cheats_init(void);
     cheats_init();
+    companion_init();
     static const ControlCmd player[] = {
         {"state", "", "Frame number, uptime, fps and hour", cmd_state, CONTROL_PLAYER},
         {"adventure", "", "Read current stage and confirmed shrine for companion apps", cmd_adventure, CONTROL_PLAYER},

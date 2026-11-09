@@ -11,6 +11,10 @@ int main(void) {
         assert(local_assist_find(local_assist_name(i)) == i);
     }
     assert(rt_local_health(12, 4) == 4);
+    assert(local_health_last() == 4 && local_death_count() == 0);
+    assert(rt_local_health(4, 0) == 0);
+    assert(local_health_last() == 0 && local_death_count() == 1);
+    assert(rt_local_health(0, 0) == 0 && local_death_count() == 1);
     local_assist_set(LOCAL_HEALTH, 1);
     assert(rt_local_health(12, 4) == 12);
     assert(rt_local_health(12, 0) == 12);

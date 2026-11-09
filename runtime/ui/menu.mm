@@ -21,6 +21,7 @@
 #include "osk.h"
 #include "console.h"
 #include "cheat_panel.h"
+#include "companion_overlay.h"
 #ifdef __APPLE__
 #include "imgui_impl_metal.h"
 #else
@@ -1439,7 +1440,7 @@ static bool menu_draws(bool *pointer_hover = NULL, float *pointer_box = NULL, bo
     if (pointer_hover) *pointer_hover = hover;
     if (gyro_show) *gyro_show = gyro_on;
     return g_open.load() || g_kbd.load() == 1 || g_sizes.load() || console_is_open() || cheat_panel_is_open() || gyro_on || hover ||
-           g_settings.perf_overlay != PERF_OFF;
+           g_settings.perf_overlay != PERF_OFF || companion_overlay_needed();
 }
 
 bool menu_render_needed(void) { return menu_draws(); }
@@ -1522,6 +1523,7 @@ void menu_render(void *cmd, uint32_t target_w, uint32_t target_h) {
     }
 
     if (g_settings.perf_overlay != PERF_OFF) perf_overlay_draw(io, scale);
+    if (!open && !kbd && !sizes && !con && !cheat_panel_is_open()) companion_overlay_draw(io, scale);
     if (!open && !kbd && !sizes && !con && gyro_scene_show) gyro_scene_draw(io, scale, gyro_scene);
 
     if (open) {

@@ -10,6 +10,8 @@ void local_stamina_set(int enabled);
 void local_assists_init(void);
 uint32_t rt_local_stamina(uint32_t current, uint32_t requested);
 uint32_t rt_local_health(uint32_t current, uint32_t requested);
+int local_health_last(void);        // last stored player health in quarter hearts, -1 unknown
+unsigned local_death_count(void);   // health stores that reached zero since start
 int rt_local_food_item(uint32_t type, uint32_t use);
 int local_equipment_name(const char *name);
 uint32_t rt_local_durability_damage(uint64_t actor, uint32_t damage);
