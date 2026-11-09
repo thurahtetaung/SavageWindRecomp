@@ -49,5 +49,18 @@ class PatchGuardTests(unittest.TestCase):
             local_assists.install(module)
         self.assertIs(module.patches[address], existing)
 
+    def test_upstream_sites_step_aside_and_life_is_observed(self):
+        module = self.module()
+        stamina, life = module.base + local_assists.OFFSET, module.base + 0xcc4e70
+        upstream = lambda m, a: '{ upstream(); }'
+        module.sites = {'stamina_store': stamina, 'link_life_store': life}
+        module.patches = {stamina: upstream, life: upstream}
+        local_assists.install(module)
+        self.assertIs(module.patches[stamina], upstream)  # upstream's option does the job
+        text = module.patches[life](module, life)
+        self.assertIn('upstream();', text)  # upstream's patch still runs, unchanged
+        self.assertIn('rt_local_health_seen', text)
+        self.assertIn(module.base + 0xcc7174, module.patches)  # this fork's own sites still go in
+
 if __name__ == '__main__':
     unittest.main(testRunner=unittest.TextTestRunner(stream=sys.stdout, verbosity=2))
