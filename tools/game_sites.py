@@ -63,6 +63,9 @@ PAD_QUERY = ('a9be7bfd a9014ff4 910003fd 7100a43f 90000008/9f00001f 91000108/ffc
 OPT_TWO_SITES = ('opt_two_redraw', 'opt_two_select', 'opt_two_state', 'opt_two_decide', 'opt_two_after', 'opt_two_row_state', 'opt_two_update_control', 'opt_two_initial_control', 'opt_two_left', 'opt_two_right', 'opt_two_text', 'opt_two_help', 'opt_two_pane_calc')
 
 SITES = [
+    # Native map pins (1.9.0): the map manager and its world-position placement method.
+    Site('scope_pin_manager', 'ref', '90000016/9f00001f f94002c8/ffc003ff f9435515 911a8109 eb0902bf 54000001/ff00001f 52800541 aa1403e0', 1),
+    Site('scope_pin_place', 'code', 'd10103ff a9027bfd a9034ff4 910083fd b9000be1 528005a9 aa0203f3 b9400be8', 0),
     # Experimental dual binding cells. Every pattern must match; no KNOWN fallback.
     Site('opt_two_redraw', 'code', 'd10103ff a9017bfd a90257f6 a9034ff4 910043fd 90000009/9f00001f 91000129/ffc003ff b9405008', 0),
     Site('opt_two_select', 'code', 'b976b008 7100051f 5400000b/ff00001f a9be7bfd a9014ff4 910003fd 9000000b/9f00001f 9100016b/ffc003ff', 0),
@@ -357,6 +360,7 @@ SITES = [
 # Without them the mouse turns the camera through the right stick, as before (runtime/hle/input.c); without the
 # second group it turns it without the game's camera inversion options.
 OPTIONAL_GROUPS = [
+    ('scope_pin_manager', 'scope_pin_place'),
     ('quick_drop_tick', 'quick_drop_actor_call', 'player_drop_forbidden', 'actor_info_lookup',
      'actor_info_has_tag', 'pouch_discard', 'player_equipment', 'pouch_default_name',
      'player_schedule_equip', 'pouch_equipped_snapshot', 'actor_index_assign', 'actor_index_resolve',

@@ -34,6 +34,8 @@
 
 // Optional helpers are zero when their complete feature group was not found.
 #define GAME_SITES_OPTIONAL(X) \
+    X(scope_pin_manager) \
+    X(scope_pin_place) \
     X(pouch_lock)             /* native recursive inventory mutex */ \
     X(pouch_unlock)           \
     X(pouch_page_count)       /* entries on an inventory page */ \

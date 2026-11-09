@@ -6,6 +6,7 @@
 // Warps reuse the control layer's teleport (runtime/control_tp.c). The entry words of every called function are
 // checked once before the first call; any mismatch disables the cheats instead of calling into unknown code.
 #include "cheats.h"
+#include "scope_pin.h"
 
 #include <ctype.h>
 #include <pthread.h>
@@ -637,6 +638,7 @@ void cheats_frame(uint64_t frame) {
 void cheats_game_tick(void) {
     g_ticks++;
     if (!kernel_current_cpu()) { g_why = 1; return; }
+    scope_pin_tick();
     if (!cheats_supported()) { g_why = 2; return; }
     if (!cheats_world_ready()) { g_why = 3; return; }
     g_why = 0;

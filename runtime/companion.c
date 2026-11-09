@@ -1,5 +1,6 @@
 // Companion overlay commands (runtime/companion.h). Both are player safe: they only change what the overlay shows.
 #include "companion.h"
+#include "scope_pin.h"
 
 #include <math.h>
 #include <pthread.h>
@@ -160,6 +161,7 @@ static void cmd_beacon(int argc, char **argv, ControlReply *r) {
 }
 
 void companion_init(void) {
+    scope_pin_init();
     static const ControlCmd cmds[] = {
         {"notify", "[--seconds N] [--from name] <text> | clear", "Show a short companion message over the game", cmd_notify, CONTROL_PLAYER},
         {"beacon", "<x> <z> [name] | clear", "Show the direction and distance to a place over the game", cmd_beacon, CONTROL_PLAYER},
