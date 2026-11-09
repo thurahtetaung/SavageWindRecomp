@@ -502,6 +502,19 @@ static void keys_icon(Canvas *c, Box b, const int *slots, int dirs) {
     }
     if (arrows == dirs) { keycap(c, b, NULL, dirs); return; }
     if (letters && n && !arrows) {
+        bool word = true;  // letters read as a word ("WASD"); digits run together read as a number ("3241")
+        for (int i = 0; i < n; i++) word &= (label[i] >= 'A' && label[i] <= 'Z') || (label[i] >= 'a' && label[i] <= 'z');
+        if (n == 4 && !word) {  // this fork: four keycaps in the d-pad's own cross (up, down, left, right)
+            static const float off[4][2] = {{0, -1}, {0, 1}, {-1, 0}, {1, 0}};
+            float h = b.s * 0.17f, d = b.s * 0.33f;
+            for (int i = 0; i < 4; i++) {
+                char one[2] = {label[i], 0};
+                float x = b.cx + off[i][0] * d, y = b.cy + off[i][1] * d;
+                fill(c, box(x, y, h, h, h * 0.3f));
+                cut_text(c, one, x, y, h * 1.25f, h * 1.8f);
+            }
+            return;
+        }
         if (n == 4) {  // up left down right: "WASD"
             char wasd[5] = {label[0], label[2], label[1], label[3], 0};
             keycap(c, b, wasd, 0);
