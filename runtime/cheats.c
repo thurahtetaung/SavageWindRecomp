@@ -662,7 +662,7 @@ static void reply_queued(ControlReply *rep, bool ok, const char *what) {
     control_field_str(rep, "queued", what);
     control_text(rep, "%s%s", what, cheats_world_ready() ? "" : " (runs when you are back in the game)");
 }
-static void cmd_give(int argc, char **argv, ControlReply *rep) {
+__attribute__((unused)) static void cmd_give(int argc, char **argv, ControlReply *rep) {  // (console: upstream's give, runtime/items.c)
     if (argc < 2) { control_fail(rep, "Usage: give <actor or English name> [count]"); return; }
     int count = 1, last = argc;
     if (argc > 2) { char *e; long n = strtol(argv[argc - 1], &e, 10); if (!*e && n > 0) { count = (int)n; last = argc - 1; } }
@@ -674,7 +674,7 @@ static void cmd_give(int argc, char **argv, ControlReply *rep) {
     snprintf(what, sizeof what, "Giving %d x %s", count, it->name);
     reply_queued(rep, cheat_give(it->actor, it->value, count > 999 ? 999 : count), what);
 }
-static void cmd_rupees(int argc, char **argv, ControlReply *rep) {
+__attribute__((unused)) static void cmd_rupees(int argc, char **argv, ControlReply *rep) {  // (console: upstream's rupees, runtime/rupees.c)
     if (argc == 1) { control_field_int(rep, "rupees", cheat_rupees_cached()); return; }
     if (argc != 2) { control_fail(rep, "Usage: rupees [<amount> | +<amount> | -<amount> | max]"); return; }
     const char *a = argv[1];
@@ -797,13 +797,11 @@ void menu_cheat_panel_open(void);  // runtime/ui/menu.mm
 static void cmd_cheatmenu(int argc, char **argv, ControlReply *rep) {
     (void)argc; (void)argv;
     menu_cheat_panel_open();
-    control_text(rep, "Cheat panel opened (F9 or L3 + R3 toggles it)");
+    control_text(rep, "Cheat panel opened (F9 toggles it)");
 }
 
 void cheats_init(void) {
     static const ControlCmd cmds[] = {
-        {"give", "<item> [count]", "Add an item to the inventory (local cheat)", cmd_give, CONTROL_PLAYER},
-        {"rupees", "[n | +n | -n | max]", "Show or change rupees (local cheat)", cmd_rupees, CONTROL_PLAYER},
         {"warp", "<place>", "Warp to a shrine, tower, town or stable (local cheat)", cmd_warp, CONTROL_PLAYER},
         {"amiibo", "<id | wolf | epona>", "Put a figure on the virtual amiibo reader (local cheat)", cmd_amiibo, CONTROL_PLAYER},
         {"travel", "<place> | <x> <y> <z>", "Fast travel to a place, with the game's own loading screen (local cheat)", cmd_travel, CONTROL_PLAYER},
@@ -811,7 +809,7 @@ void cheats_init(void) {
         {"medallion", "<place>", "Move the Travel Medallion to a place, for a proper fast travel there (local cheat)", cmd_medallion, CONTROL_PLAYER},
         {"shrine", "[end | entrance | chest <n>]", "Shrine solver: warp to the end of the shrine you are in", cmd_shrine, CONTROL_PLAYER},
         {"flag", "<name> [value]", "Read a game data flag, or set an s32 one (local cheat)", cmd_flag, CONTROL_PLAYER},
-        {"cheatmenu", "", "Open the cheat panel (also F9, or L3 + R3)", cmd_cheatmenu, CONTROL_PLAYER},
+        {"cheatmenu", "", "Open the cheat panel (also F9)", cmd_cheatmenu, CONTROL_PLAYER},
         {"cheatstate", "", "Why queued cheats are waiting (local cheat)", cmd_cheatstate, CONTROL_PLAYER},
     };
     control_register(cmds, (int)(sizeof cmds / sizeof *cmds));

@@ -69,4 +69,3 @@ SERVICE("aoc:u", aoc_u) {
     }
 }
 
-// nfp:user (amiibo): runtime/services/nfp.c

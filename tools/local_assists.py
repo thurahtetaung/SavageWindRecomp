@@ -7,15 +7,43 @@ BUILD = 'cd57b23fa4bbad65803d9788c01821ee'
 OFFSET = 0xcc7430
 WORD = 0xbd00a668  # str s8, [x19, #0xa4]
 
+# Sites that upstream's own patches (tools/patches.py, Options > Accessibility) now take. Where upstream's option does
+# the same job, this fork's patch steps aside and its toggle drives upstream's setting (runtime/local_assists.c).
+# Link's life stores are wrapped instead: upstream's patch runs unchanged and the result is observed for companion
+# apps (health and deaths, runtime/companion.c).
+UPSTREAM_COVERS = {'stamina_store', 'pouch_remove_arrows'}
+UPSTREAM_OBSERVE = {'link_life_store', 'link_life_tick'}
+
+
+def _observed(previous):
+    def patch(module, address):
+        return ('{ extern void rt_local_health_seen(uint32_t, uint32_t); uint32_t fn_old = LD32(c->x[21]); '
+                + previous(module, address)
+                + ' rt_local_health_seen(fn_old, LD32(c->x[21])); }')
+    return patch
+
+
 def install(module):
     if module.nso.build_id != BUILD:
         raise ValueError('Local assists require the verified BOTW 1.9.0 main build')
+    names = {address: name for name, address in getattr(module, 'sites', {}).items()}
+    plan = []
     for offset, word, function in SITES:
         address = module.base + offset
-        if module.word(address) != word or address in module.patches:
-            raise ValueError(f'Local assist instruction mismatch or patch conflict at {offset:#x}')
-    for offset, word, function in SITES:
-        module.patches[module.base + offset] = function
+        if module.word(address) != word:
+            raise ValueError(f'Local assist instruction mismatch at {offset:#x}')
+        if address in module.patches:
+            name = names.get(address)
+            if name in UPSTREAM_COVERS or name in UPSTREAM_OBSERVE:
+                continue  # (observed below, or left to upstream's option)
+            raise ValueError(f'Local assist patch conflict at {offset:#x} ({name or "unknown upstream patch"})')
+        plan.append((address, function))
+    for address, function in plan:
+        module.patches[address] = function
+    for name in UPSTREAM_OBSERVE:
+        address = getattr(module, 'sites', {}).get(name)
+        if address in module.patches:
+            module.patches[address] = _observed(module.patches[address])
 
 def emit(module, address):
     assert module.word(address) == WORD

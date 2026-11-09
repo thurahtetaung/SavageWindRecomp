@@ -12,6 +12,9 @@ uint32_t rt_local_stamina(uint32_t current, uint32_t requested);
 uint32_t rt_local_health(uint32_t current, uint32_t requested);
 int local_health_last(void);        // last stored player health in quarter hearts, -1 unknown
 unsigned local_death_count(void);   // health stores that reached zero since start
+void rt_local_health_seen(uint32_t before, uint32_t after);  // after upstream's life patch (observed only)
+// Toggles for assists upstream also has drive its settings (set / get: -1 for one it doesn't have)
+void local_assists_bind_upstream(void (*set)(int, int), int (*get)(int));
 int rt_local_food_item(uint32_t type, uint32_t use);
 int local_equipment_name(const char *name);
 uint32_t rt_local_durability_damage(uint64_t actor, uint32_t damage);

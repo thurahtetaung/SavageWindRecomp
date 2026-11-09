@@ -1,7 +1,7 @@
 # Local cheat panel (BOTW 1.9.0)
 
-A local, experimental addition on the `local-assists` branch. Open it with **F9**, **L3 + R3** on a controller,
-or **Options > Cheats (local)**. Esc or B closes it. Actions are queued and run on the game's thread once you are
+A local, experimental addition on the `local-assists` branch. Open it with **F9**, **Options > Cheats (local)**, or **L3 + R3** on a controller when
+upstream's free camera is not on those clicks (Options: free camera on stick clicks off). Esc or B closes it. Actions are queued and run on the game's thread once you are
 back in the game (menus closed, no cutscene or loading screen).
 
 | Tab | What it does |
@@ -14,8 +14,20 @@ back in the game (menus closed, no cutscene or loading screen).
 | Amiibo | A virtual amiibo reader: place any Zelda figure (Wolf Link, Epona's Link, Champions...), then use the amiibo rune |
 | World | Time of day and freezing it |
 
-Console (F12) equivalents: `give <item> [count]`, `rupees [n | +n | -n | max]`, `warp <place>`, `travel <place | x y z>`,
+Console (F12) equivalents: `warp <place>`, `travel <place | x y z>`,
 `shrine [end | entrance | chest n]`, `flag <name> [value]`, `assist <name> [on|off]`, `cheatmenu`, `cheatstate`.
+Giving items and rupees from the console uses upstream's `give` and `rupees` (docs/CONTROL.md); the panel's own Items
+and rupee controls are unchanged.
+
+## Living with upstream (since the Alpha 5 sync)
+
+- Stamina, arrows and health: upstream's Options > Accessibility now has Infinite stamina, Infinite arrows and God
+  mode at the same game code. This fork's toggles (panel, Options > Gameplay, `assist`) switch those settings; its own
+  patches step aside there (tools/local_assists.py). Durability, food and horse stamina stay this fork's own.
+- Link's life: upstream's life patch runs unchanged; this fork only observes the result for companion apps (health and
+  deaths in `adventure`).
+- Amiibo: this fork's reader (runtime/services/nfp_local.c) is used; upstream's runtime/services/nfp.c stays in the tree
+  unchanged but out of the build (Makefile LOCAL_SERVICES), and its overlay amiibo tab is hidden (runtime/ui/menu.mm).
 
 ## Lists from your own files
 

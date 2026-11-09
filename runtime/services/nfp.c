@@ -1,285 +1,220 @@
-// nfp:user, the amiibo service, with one virtual reader (local addition; it used to report no reader). The cheat panel
-// "places" a figure on it (nfp_virtual_place); the game's next detection finds it, as if the figure were tapped.
-// Command numbers, structure layouts and result codes follow switchbrew and the open-source emulators (yuzu's
-// nfp_types.h; Ryujinx's VirtualAmiibo for the ModelInfo byte order). A figure's ID is the 8-byte amiibo ID
-// (character, variant, type, model number, series). Each scan gets a fresh random UID, so the game's
-// once-a-day-per-figure limit does not apply. The game's own data on the figure (its application area: Wolf Link's
-// hearts, for example) is kept in <data root>/cheats/amiibo/<id>.bin.
-#include <pthread.h>
-#include <stdio.h>
-#include <stdlib.h>
+// nfp:user, the game's amiibo reader, with virtual figures (runtime/amiibo.h). One reader (device handle 0, the first
+// controller). The game starts detection when it wants a figure (the amiibo rune): the figure chosen in Savage Wind's
+// options is on the reader then, with no window over the game (none chosen: the game finds no figure, as with an
+// empty reader). Mounting reads its data: the tag information (serial number), the model information (the amiibo
+// ID, all BOTW goes by), and its game data (application area, 0xd8 bytes), kept as a file per figure; with the
+// amiibo keys a figure's own settings and game data come from its dump (runtime/amiibo.h).
+//
+// IUser commands (nn::nfp::IUser): 0 Initialize, 1 Finalize, 2 ListDevices, 3 StartDetection, 4 StopDetection,
+// 5 Mount, 6 Unmount, 7 OpenApplicationArea, 8 GetApplicationArea, 9 SetApplicationArea, 10 Flush, 11 Restore,
+// 12 CreateApplicationArea, 13 GetTagInfo, 14 GetRegisterInfo, 15 GetCommonInfo, 16 GetModelInfo,
+// 17 AttachActivateEvent, 18 AttachDeactivateEvent, 19 GetState, 20 GetDeviceState, 21 GetNpadId,
+// 22 GetApplicationAreaSize, 23 AttachAvailabilityChangeEvent, 24 RecreateApplicationArea.
+#include <stdatomic.h>
 #include <string.h>
 #include <time.h>
 
+#include "../amiibo.h"
 #include "../hle.h"
 #include "../ipc.h"
-#include "../kernel.h"
-#include "../rt.h"
-#include "../platform.h"
-#include "nfp.h"
 
-#define NFP_RESULT(desc) (115u | ((uint32_t)(desc) << 9))
-#define R_WRONG_STATE NFP_RESULT(73)
-#define R_TAG_REMOVED NFP_RESULT(97)
-#define R_APP_AREA_MISSING NFP_RESULT(128)
-#define R_APP_AREA_EXISTS NFP_RESULT(168)
-#define R_WRONG_APP_AREA_ID NFP_RESULT(152)
-#define APP_AREA_SIZE 0xD8
+enum { DEV_INITIALIZED, DEV_SEARCHING, DEV_FOUND, DEV_REMOVED, DEV_MOUNTED, DEV_UNAVAILABLE, DEV_FINALIZED };
+enum { E_DEVICE_NOT_FOUND = 64, E_WRONG_STATE = 73, E_TAG_REMOVED = 97, E_NOT_SET_UP = 120, E_AREA_NOT_INITIALIZED = 128,
+       E_WRONG_AREA_ID = 152, E_AREA_EXISTS = 168 };
+#define NFP_ERROR(d) MAKE_RESULT(115, d)
+#define AREA_SIZE 0xd8
 
-enum { S_INITIALIZED, S_SEARCHING, S_FOUND, S_REMOVED, S_MOUNTED, S_UNAVAILABLE, S_FINALIZED };
-
-static pthread_mutex_t g_lock = PTHREAD_MUTEX_INITIALIZER;
-static int g_state = S_INITIALIZED;
-static uint64_t g_placed;      // figure waiting on the reader (0: none)
-static uint64_t g_tag;         // figure being read
-static uint8_t g_uid[7];
+static _Atomic int g_state = DEV_INITIALIZED;  // the reader's
+static _Atomic int g_fig = -1;                 // the figure on it (amiibo_at), -1 none
+static bool g_initialized;
 static KEvent *g_activate, *g_deactivate;
-static uint32_t g_activate_r, g_deactivate_r;
-static uint8_t g_area[APP_AREA_SIZE];
-static uint32_t g_area_id;     // the game's access id for the area (0: none created)
-static bool g_area_open;
-static char g_last[96] = "No figure placed.";
-static bool g_mounted_once;  // the game read the figure in this detection (else it stays on the reader)
-static int g_gen;            // detection generation, for the delayed tap
+static uint32_t g_activate_h, g_deactivate_h, g_avail_h;
+// the mounted figure's game data
+static uint8_t g_area[AREA_SIZE];
+static int g_area_size = -1;  // -1: none on the figure
+static uint32_t g_area_id;
+static bool g_area_open, g_area_dirty;
+static AmiiboData g_data;  // what the mounted figure holds (amiibo_read_data)
+static bool g_data_ok;     // ... read with the amiibo keys
 
-static void signal_ev(KEvent *ev) {
+RT_ON_RESET(nfp_reset) {
+    g_state = DEV_INITIALIZED, g_fig = -1, g_initialized = false;
+    g_activate = g_deactivate = NULL, g_activate_h = g_deactivate_h = g_avail_h = 0;
+    g_area_size = -1, g_area_open = g_area_dirty = false, g_data_ok = false;
+}
+
+static void fire(KEvent *ev) {
     if (!ev) return;
     klock();
     kernel_signal(ev);
-    pthread_mutex_unlock(&g_klock);
+    kunlock();
 }
 
-static void area_path(uint64_t id, char *out, size_t n) { snprintf(out, n, "cheats/amiibo/%016llx.bin", (unsigned long long)id); }
-static void load_area(uint64_t id) {
-    char p[96];
-    area_path(id, p, sizeof p);
-    g_area_id = 0;
-    memset(g_area, 0, sizeof g_area);
-    FILE *f = fopen(p, "rb");
-    if (!f) return;
-    uint32_t aid;
-    if (fread(&aid, 4, 1, f) == 1 && fread(g_area, 1, APP_AREA_SIZE, f) == APP_AREA_SIZE) g_area_id = aid;
-    fclose(f);
-}
-static void save_area(void) {
-    char p[96];
-    area_path(g_tag, p, sizeof p);
-#ifdef _WIN32
-    extern int _mkdir(const char *);
-    _mkdir("cheats");
-    _mkdir("cheats/amiibo");
-#endif
-    FILE *f = fopen(p, "wb");
-    if (!f) return;
-    fwrite(&g_area_id, 4, 1, f);
-    fwrite(g_area, 1, APP_AREA_SIZE, f);
-    fclose(f);
+static const Amiibo *mounted(IpcResp *resp) {
+    if (g_state != DEV_MOUNTED) { resp->result = NFP_ERROR(g_state == DEV_REMOVED ? E_TAG_REMOVED : E_WRONG_STATE); return NULL; }
+    return amiibo_at(g_fig);
 }
 
-// The reader finds the placed figure (caller holds g_lock).
-static void detect(void) {
-    if (!g_placed || g_state != S_SEARCHING) return;
-    g_tag = g_placed;
-    g_mounted_once = false;
-    // A UID never seen before: the game remembers which figures (by UID) it read today. rand() unseeded repeated the
-    // same UIDs every launch, so the first scan after a restart was refused as "already used today".
-    static uint64_t counter;
-    uint64_t x = plat_now_ns() ^ (++counter * 0x9e3779b97f4a7c15ull) ^ (uint64_t)time(NULL) << 20;
-    for (int i = 0; i < 7; i++) {
-        x ^= x >> 33; x *= 0xff51afd7ed558ccdull; x ^= x >> 29;
-        g_uid[i] = (uint8_t)x;
-    }
-    g_uid[0] = 0x04;  // (NXP's manufacturer byte, as on real NTAG215 figures)
-    load_area(g_tag);
-    g_state = S_FOUND;
-    snprintf(g_last, sizeof g_last, "The game found the figure...");
-    LOG("[nfp] t=%llu tap\n", (unsigned long long)(plat_now_ns() / 1000000ull));
-    LOG("[nfp] virtual figure %016llx detected\n", (unsigned long long)g_tag);
-    signal_ev(g_activate);
-}
-
-// The tap comes a moment after detection starts: the game clears the activate event right after StartDetection and
-// only then waits on it, so a signal sent inside StartDetection itself was lost.
-static void *delayed_tap(void *arg) {
-    int gen = (int)(intptr_t)arg;
-    struct timespec ts = {0, 60 * 1000 * 1000};  // (the game's first wait lasts about 110 ms)
-    nanosleep(&ts, NULL);
-    pthread_mutex_lock(&g_lock);
-    if (gen == g_gen) detect();
-    pthread_mutex_unlock(&g_lock);
-    return NULL;
-}
-static void tap_soon(void) {  // (caller holds g_lock)
-    if (!g_placed || g_state != S_SEARCHING) return;
-    pthread_t t;
-    if (!pthread_create(&t, NULL, delayed_tap, (void *)(intptr_t)++g_gen)) pthread_detach(t);
-}
-
-void nfp_virtual_place(uint64_t amiibo_id) {
-    pthread_mutex_lock(&g_lock);
-    g_placed = amiibo_id;
-    g_mounted_once = false;
-    snprintf(g_last, sizeof g_last, "Figure on the reader: use the amiibo rune in the game.");
-    tap_soon();  // (the game may already be waiting)
-    pthread_mutex_unlock(&g_lock);
-}
-void nfp_virtual_status(char *out, int n) {
-    pthread_mutex_lock(&g_lock);
-    snprintf(out, (size_t)n, "%s", g_last);
-    pthread_mutex_unlock(&g_lock);
-}
-
-static void put_buf(IpcReq *req, int i, const void *src, size_t n) {
-    IpcBuf *b = out_buf(req, i);
+static void write_out(IpcReq *req, const void *src, size_t n) {
+    IpcBuf *b = out_buf(req, 0);
     if (!b || !b->addr) return;
-    size_t k = n < b->size ? n : b->size;
+    size_t k = b->size < n ? b->size : n;
     memset((void *)(uintptr_t)b->addr, 0, b->size);
     memcpy((void *)(uintptr_t)b->addr, src, k);
 }
 
+static void today(uint8_t *p) {  // {u16 year, u8 month, u8 day}
+    time_t t = time(NULL);
+    struct tm tm = *localtime(&t);
+    int y = tm.tm_year + 1900;
+    p[0] = (uint8_t)y, p[1] = (uint8_t)(y >> 8), p[2] = (uint8_t)(tm.tm_mon + 1), p[3] = (uint8_t)tm.tm_mday;
+}
+
 static void nfp_user(Service *s, IpcReq *req, IpcResp *resp) {
     (void)s;
-    pthread_mutex_lock(&g_lock);
-    bool have = g_state == S_FOUND || g_state == S_MOUNTED;
+    const Amiibo *a;
     switch (req->cmd) {
-    case 0: g_state = S_INITIALIZED; break;                                   // Initialize
-    case 1: g_state = S_FINALIZED; break;                                     // Finalize
-    case 2: {                                                                 // ListDevices: one reader (player 1)
-        uint64_t handle = 0;
-        put_buf(req, 0, &handle, sizeof handle);
+    case 0: g_initialized = true, g_state = DEV_INITIALIZED; break;  // Initialize
+    case 1: g_initialized = false, g_state = DEV_FINALIZED; break;  // Finalize
+    case 2: {  // ListDevices: one, handle 0
+        uint64_t h = 0;
+        write_out(req, &h, sizeof h);
         OUT(int32_t, 0) = 1;
         resp_size(resp, 4);
         break;
     }
-    case 3: g_state = S_SEARCHING; tap_soon(); break;                         // StartDetection
-    case 4:                                                                   // StopDetection
-        if (g_state == S_FOUND || g_state == S_MOUNTED) signal_ev(g_deactivate);
-        if (g_mounted_once && g_placed == g_tag) {  // read: the figure leaves the reader
-            g_placed = 0;
-            snprintf(g_last, sizeof g_last, "Figure read by the game. Place it again for another scan.");
+    case 3: {  // StartDetection: the chosen figure is on the reader (none chosen: nothing is found)
+        int i = amiibo_on_reader();
+        g_fig = i, g_state = i >= 0 ? DEV_FOUND : DEV_SEARCHING;
+        if (i >= 0) {
+            LOG("[nfp] %s on the reader\n", amiibo_at(i)->name);
+            fire(g_activate);
+        } else {
+            LOG("[nfp] looking for a figure, none on the reader\n");
         }
-        g_mounted_once = false;
-        g_gen++;  // (a pending tap is for this detection only)
-        g_state = S_INITIALIZED;
-        g_area_open = false;
         break;
-    case 5: if (have) { g_state = S_MOUNTED; g_mounted_once = true; } else resp->result = R_WRONG_STATE; break;  // Mount
-    case 6: if (have) g_state = S_FOUND; g_area_open = false; break;                    // Unmount
-    case 7: {                                                                 // OpenApplicationArea(access id)
-        uint32_t aid = IN(uint32_t, 8);
-        if (g_state != S_MOUNTED) resp->result = R_WRONG_STATE;
-        else if (!g_area_id) resp->result = R_APP_AREA_MISSING;
-        else if (g_area_id != aid) resp->result = R_WRONG_APP_AREA_ID;
+    }
+    case 4:  // StopDetection (the game also sends it now and then with nothing going on)
+        if (g_state != DEV_INITIALIZED) LOG("[nfp] detection stopped\n");
+        if (g_state == DEV_MOUNTED && g_area_dirty) amiibo_area_save(amiibo_at(g_fig), g_area_id, g_area, g_area_size);
+        g_fig = -1, g_state = DEV_INITIALIZED, g_area_open = g_area_dirty = false;
+        break;
+    case 5:  // Mount: read the figure's game data
+        if (g_state != DEV_FOUND) { resp->result = NFP_ERROR(g_state == DEV_REMOVED ? E_TAG_REMOVED : E_WRONG_STATE); break; }
+        g_area_size = amiibo_area_load(amiibo_at(g_fig), &g_area_id, g_area, AREA_SIZE);
+        g_data_ok = amiibo_read_data(amiibo_at(g_fig), &g_data);
+        g_area_open = g_area_dirty = false;
+        g_state = DEV_MOUNTED;
+        break;
+    case 6:  // Unmount
+        if (g_state == DEV_MOUNTED) {
+            if (g_area_dirty) amiibo_area_save(amiibo_at(g_fig), g_area_id, g_area, g_area_size);
+            g_state = DEV_FOUND, g_area_open = g_area_dirty = false;
+        }
+        break;
+    case 7:  // OpenApplicationArea (access ID)
+        if (!mounted(resp)) break;
+        if (g_area_size < 0) resp->result = NFP_ERROR(E_AREA_NOT_INITIALIZED);
+        else if (g_area_id != IN(uint32_t, 8)) resp->result = NFP_ERROR(E_WRONG_AREA_ID);
         else g_area_open = true;
         break;
-    }
-    case 8:                                                                   // GetApplicationArea
-        if (g_state != S_MOUNTED || !g_area_open) { resp->result = R_WRONG_STATE; break; }
-        put_buf(req, 0, g_area, APP_AREA_SIZE);
-        OUT(uint32_t, 0) = APP_AREA_SIZE;
+    case 8:  // GetApplicationArea
+        if (!mounted(resp)) break;
+        if (!g_area_open) { resp->result = NFP_ERROR(E_AREA_NOT_INITIALIZED); break; }
+        write_out(req, g_area, (size_t)g_area_size);
+        OUT(uint32_t, 0) = (uint32_t)g_area_size;
         resp_size(resp, 4);
         break;
-    case 9: {                                                                 // SetApplicationArea
+    case 9: {  // SetApplicationArea
+        if (!mounted(resp)) break;
         IpcBuf *b = in_buf(req, 0);
-        if (g_state != S_MOUNTED || !g_area_open || !b) { resp->result = R_WRONG_STATE; break; }
-        memset(g_area, 0, sizeof g_area);
-        memcpy(g_area, (void *)(uintptr_t)b->addr, b->size < APP_AREA_SIZE ? b->size : APP_AREA_SIZE);
+        if (!g_area_open || !b) { resp->result = NFP_ERROR(E_AREA_NOT_INITIALIZED); break; }
+        size_t n = b->size < AREA_SIZE ? b->size : AREA_SIZE;
+        memset(g_area, 0, AREA_SIZE);
+        memcpy(g_area, (const void *)(uintptr_t)b->addr, n);
+        g_area_size = AREA_SIZE, g_area_dirty = true;
         break;
     }
-    case 10: if (g_state == S_MOUNTED) save_area(); else resp->result = R_WRONG_STATE; break;  // Flush
-    case 11: break;                                                           // Restore
-    case 12: case 24: {                                                       // Create / RecreateApplicationArea
+    case 10:  // Flush
+        if ((a = mounted(resp)) && g_area_dirty) amiibo_area_save(a, g_area_id, g_area, g_area_size), g_area_dirty = false;
+        break;
+    case 12: case 24: {  // CreateApplicationArea / RecreateApplicationArea (access ID, its first contents)
+        if (!(a = mounted(resp))) break;
+        if (req->cmd == 12 && g_area_size >= 0) { resp->result = NFP_ERROR(E_AREA_EXISTS); break; }
         IpcBuf *b = in_buf(req, 0);
-        if (g_state != S_MOUNTED) { resp->result = R_WRONG_STATE; break; }
-        if (req->cmd == 12 && g_area_id) { resp->result = R_APP_AREA_EXISTS; break; }
-        g_area_id = IN(uint32_t, 8);
-        memset(g_area, 0, sizeof g_area);
-        if (b) memcpy(g_area, (void *)(uintptr_t)b->addr, b->size < APP_AREA_SIZE ? b->size : APP_AREA_SIZE);
-        save_area();
+        memset(g_area, 0, AREA_SIZE);
+        if (b) memcpy(g_area, (const void *)(uintptr_t)b->addr, b->size < AREA_SIZE ? b->size : AREA_SIZE);
+        g_area_id = IN(uint32_t, 8), g_area_size = AREA_SIZE, g_area_dirty = false;
+        amiibo_area_save(a, g_area_id, g_area, g_area_size);
         break;
     }
-    case 13: {                                                                // GetTagInfo (0x58)
-        if (!have) { resp->result = g_state == S_REMOVED ? R_TAG_REMOVED : R_WRONG_STATE; break; }
+    case 13: {  // GetTagInfo: the serial number, an NFC-A type 2 tag
+        int st = g_state;
+        if (st != DEV_FOUND && st != DEV_MOUNTED) { resp->result = NFP_ERROR(st == DEV_REMOVED ? E_TAG_REMOVED : E_WRONG_STATE); break; }
         uint8_t t[0x58] = {0};
-        memcpy(t, g_uid, 7);
-        t[10] = 7;                          // uid length
-        t[0x20] = 1;                        // protocol: type A
-        t[0x24] = 2;                        // tag type: type 2 (NTAG215)
-        put_buf(req, 0, t, sizeof t);
+        memcpy(t, amiibo_at(g_fig)->uid, 7);
+        t[0x0a] = 7, t[0x20] = 1, t[0x24] = 2;
+        write_out(req, t, sizeof t);
         break;
     }
-    case 14: {                                                                // GetRegisterInfo (0x100)
-        if (g_state != S_MOUNTED) { resp->result = R_WRONG_STATE; break; }
+    case 14: {  // GetRegisterInfo: its nickname (no owner Mii); read with the keys, a figure never set up has none
+        if (!(a = mounted(resp))) break;
+        if (g_data_ok && !(g_data.flags & AMIIBO_SET_UP)) { resp->result = NFP_ERROR(E_NOT_SET_UP); break; }
         uint8_t r[0x100] = {0};
-        time_t now = time(NULL);
-        struct tm *tm = localtime(&now);
-        uint16_t y = (uint16_t)(tm->tm_year + 1900);
-        memcpy(r + 0x58, &y, 2); r[0x5a] = (uint8_t)(tm->tm_mon + 1); r[0x5b] = (uint8_t)tm->tm_mday;
-        const char *name = "amiibo";  // (UTF-16)
-        for (int i = 0; name[i]; i++) r[0x5c + 2 * i] = (uint8_t)name[i];
-        put_buf(req, 0, r, sizeof r);
-        break;
-    }
-    case 15: {                                                                // GetCommonInfo (0x40)
-        if (g_state != S_MOUNTED) { resp->result = R_WRONG_STATE; break; }
-        uint8_t c[0x40] = {0};
-        time_t now = time(NULL);
-        struct tm *tm = localtime(&now);
-        uint16_t y = (uint16_t)(tm->tm_year + 1900);
-        uint32_t size = APP_AREA_SIZE;
-        memcpy(c, &y, 2); c[2] = (uint8_t)(tm->tm_mon + 1); c[3] = (uint8_t)tm->tm_mday;
-        memcpy(c + 8, &size, 4);
-        put_buf(req, 0, c, sizeof c);
-        break;
-    }
-    case 16: {                                                                // GetModelInfo (0x40)
-        if (g_state != S_MOUNTED) { resp->result = R_WRONG_STATE; break; }
-        uint8_t m[0x40] = {0};
-        uint8_t id[8];
-        for (int i = 0; i < 8; i++) id[i] = (uint8_t)(g_tag >> (56 - 8 * i));  // the ID's bytes as on the figure
-        m[0] = id[0]; m[1] = id[1];          // character id: the figure's byte order
-        m[2] = id[2];                        // variant
-        m[3] = id[3];                        // type (figure, card, yarn...)
-        m[4] = id[5]; m[5] = id[4];          // model number: native order
-        m[6] = id[6];                        // series
-        put_buf(req, 0, m, sizeof m);
-        break;
-    }
-    // A fresh event each time: the game attaches, finalizes (closing its handles), initializes and attaches again;
-    // handing back the first handle left it waiting on a closed one, so a found figure was never read.
-    case 17:                                                                  // AttachActivateEvent
-        g_activate = kernel_create_event_pair(&(uint32_t){0}, &g_activate_r);
-        resp->copy_handles[resp->ncopy++] = g_activate_r;
-        break;
-    case 18:                                                                  // AttachDeactivateEvent
-        g_deactivate = kernel_create_event_pair(&(uint32_t){0}, &g_deactivate_r);
-        resp->copy_handles[resp->ncopy++] = g_deactivate_r;
-        break;
-    case 19: OUT(uint32_t, 0) = g_state == S_FINALIZED ? 0 : 1; resp_size(resp, 4); break;   // GetState
-    case 20: OUT(uint32_t, 0) = (uint32_t)g_state; resp_size(resp, 4); break;               // GetDeviceState
-    case 21: OUT(uint32_t, 0) = 0; resp_size(resp, 4); break;                                // GetNpadId
-    case 22: OUT(uint32_t, 0) = APP_AREA_SIZE; resp_size(resp, 4); break;                    // GetApplicationAreaSize
-    case 23: {                                                                // AttachAvailabilityChangeEvent
-        uint32_t w, r;
-        kernel_create_event_pair(&w, &r);
-        resp->copy_handles[resp->ncopy++] = r;
-        break;
-    }
-    default: LOG("[nfp] IUser cmd %u (ok)\n", req->cmd);
-    }
-    {   // (all commands, timed: the game's detection loop decides how the reader must behave)
-        static uint32_t last_cmd = 999;
-        static int last_state = -1, repeats;
-        bool poll = req->cmd == 19 || req->cmd == 20;  // (polled about 9 times a second: logged on a change only)
-        if ((poll ? g_state != last_state : req->cmd != last_cmd || g_state != last_state) || ++repeats % 2000 == 0) {
-            LOG("[nfp] t=%llu cmd %u -> state %d result %x\n", (unsigned long long)(plat_now_ns() / 1000000ull), req->cmd,
-                g_state, resp->result);
-            last_cmd = req->cmd;
-            last_state = g_state;
-            repeats = 0;
+        today(r + 0x58);
+        char *nick = (char *)r + 0x5c;  // (UTF-8)
+        if (g_data_ok) {
+            int k = 0;
+            for (int i = 0; i < 10 && g_data.nickname[i] && k < 0x25; i++) {
+                unsigned c = g_data.nickname[i];
+                if (c < 0x80) nick[k++] = (char)c;
+                else if (c < 0x800) nick[k++] = (char)(0xc0 | c >> 6), nick[k++] = (char)(0x80 | (c & 0x3f));
+                else nick[k++] = (char)(0xe0 | c >> 12), nick[k++] = (char)(0x80 | (c >> 6 & 0x3f)), nick[k++] = (char)(0x80 | (c & 0x3f));
+            }
+        } else {
+            snprintf(nick, 0x29, "%.10s", a->name);
         }
+        write_out(req, r, sizeof r);
+        break;
     }
-    pthread_mutex_unlock(&g_lock);
+    case 15: {  // GetCommonInfo
+        if (!mounted(resp)) break;
+        uint8_t c[0x40] = {0};
+        today(c);
+        c[0x08] = AREA_SIZE;
+        write_out(req, c, sizeof c);
+        break;
+    }
+    case 16: {  // GetModelInfo: the amiibo ID (character as on the tag, the model number little-endian)
+        if (!(a = mounted(resp))) break;
+        uint8_t m[0x40] = {0};
+        m[0] = a->id[0], m[1] = a->id[1], m[2] = a->id[2], m[3] = a->id[3];
+        m[4] = a->id[5], m[5] = a->id[4], m[6] = a->id[6];
+        write_out(req, m, sizeof m);
+        break;
+    }
+    // (a new event each time: the game closes the last one's handle when it finalizes the reader)
+    case 17:  // AttachActivateEvent
+        g_activate = kernel_create_event_pair(&(uint32_t){0}, &g_activate_h);
+        resp->copy_handles[resp->ncopy++] = g_activate_h;
+        if (g_state == DEV_FOUND) fire(g_activate);  // (the figure was put on the reader before the game asked)
+        break;
+    case 18:  // AttachDeactivateEvent
+        g_deactivate = kernel_create_event_pair(&(uint32_t){0}, &g_deactivate_h);
+        resp->copy_handles[resp->ncopy++] = g_deactivate_h;
+        break;
+    case 23:  // AttachAvailabilityChangeEvent
+        kernel_create_event_pair(&(uint32_t){0}, &g_avail_h);
+        resp->copy_handles[resp->ncopy++] = g_avail_h;
+        break;
+    case 19: OUT(uint32_t, 0) = g_initialized ? 1 : 0; resp_size(resp, 4); break;  // GetState
+    case 20: OUT(uint32_t, 0) = (uint32_t)g_state; resp_size(resp, 4); break;    // GetDeviceState
+    case 21: OUT(uint32_t, 0) = 0; resp_size(resp, 4); break;                   // GetNpadId: the first controller
+    case 22: OUT(uint32_t, 0) = AREA_SIZE; resp_size(resp, 4); break;           // GetApplicationAreaSize
+    case 11: break;                                                            // Restore
+    default: LOG("[nfp] IUser cmd %u (ok)\n", req->cmd); resp_size(resp, 0x10);
+    }
+    if (req->cmd != 4 && req->cmd != 19 && req->cmd != 20) LOG("[nfp] cmd %u -> %#x, reader %d\n", req->cmd, resp->result, (int)g_state);
 }
 
 SERVICE("nfp:user", nfp_user_manager) {

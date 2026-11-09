@@ -2,6 +2,9 @@
 #include <assert.h>
 #include <math.h>
 #include <string.h>
+static int up_stamina, up_arrows;
+static void up_set(int a, int v) { if (a == LOCAL_STAMINA) up_stamina = v; if (a == LOCAL_ARROWS) up_arrows = v; }
+static int up_get(int a) { return a == LOCAL_STAMINA ? up_stamina : a == LOCAL_ARROWS ? up_arrows : -1; }
 static uint32_t bits(float f) { uint32_t n; memcpy(&n, &f, 4); return n; }
 int main(void) {
     assert(!local_stamina_enabled());
@@ -52,4 +55,22 @@ int main(void) {
     assert(rt_local_stamina(bits(NAN), bits(900)) == bits(900));
     local_stamina_set(0);
     assert(rt_local_stamina(bits(1000), bits(900)) == bits(900));
+    // upstream's life patch, observed: health and deaths, never changed
+    unsigned d0 = local_death_count();
+    rt_local_health_seen(8, 4);
+    assert(local_health_last() == 4 && local_death_count() == d0);
+    rt_local_health_seen(4, 0);
+    assert(local_health_last() == 0 && local_death_count() == d0 + 1);
+    rt_local_health_seen(0, 0);
+    assert(local_death_count() == d0 + 1);
+    // toggles that drive upstream's settings once bound; a flag saved before the sync carries over
+    local_assist_set(LOCAL_STAMINA, 1);
+    local_assists_bind_upstream(up_set, up_get);
+    assert(up_stamina == 1 && local_assist_enabled(LOCAL_STAMINA));
+    local_assist_set(LOCAL_STAMINA, 0);
+    assert(up_stamina == 0 && !local_assist_enabled(LOCAL_STAMINA));
+    up_arrows = 1;
+    assert(local_assist_enabled(LOCAL_ARROWS));
+    local_assist_set(LOCAL_FOOD, 1);
+    assert(local_assist_enabled(LOCAL_FOOD));
 }

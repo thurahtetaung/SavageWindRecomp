@@ -283,7 +283,7 @@ void cheat_panel_draw(ImGuiIO &io, float scale, ImFont *font) {
     if (font) ImGui::PushFont(font);
     ImGui::TextColored(k_gold, "CHEATS");
     ImGui::SameLine();
-    ImGui::TextColored(k_dim, "local, experimental  |  F9 or L3+R3 to toggle  |  Esc / B to close");
+    ImGui::TextColored(k_dim, "local, experimental  |  F9 to toggle (L3+R3 with free camera clicks off)  |  Esc / B to close");
     char status[160];
     cheat_status(status, sizeof status);
     int pending = cheat_pending();

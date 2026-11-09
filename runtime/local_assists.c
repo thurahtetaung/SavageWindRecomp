@@ -6,11 +6,25 @@
 
 static atomic_int enabled[LOCAL_ASSIST_COUNT];
 static const char *names[] = {"stamina", "health", "durability", "arrows", "food", "horse"};
+// Assists upstream now has too (Options > Accessibility: infinite stamina, infinite arrows, god mode): this fork's
+// toggles drive upstream's settings, bound at start-up (runtime/local_assists_control.c). Unbound (the unit test) they
+// are plain flags.
+static void (*upstream_set)(int assist, int value);
+static int (*upstream_get)(int assist);  // -1: not one of upstream's
+void local_assists_bind_upstream(void (*set)(int, int), int (*get)(int)) {
+    upstream_set = set, upstream_get = get;
+    for (int i = 0; i < LOCAL_ASSIST_COUNT; i++)  // (a fork setting saved before the sync carries over)
+        if (atomic_load_explicit(&enabled[i], memory_order_relaxed) && get(i) == 0) set(i, 1);
+}
 int local_assist_enabled(int assist) {
-    return assist >= 0 && assist < LOCAL_ASSIST_COUNT ? atomic_load_explicit(&enabled[assist], memory_order_relaxed) : 0;
+    if (assist < 0 || assist >= LOCAL_ASSIST_COUNT) return 0;
+    int up = upstream_get && assist != LOCAL_HEALTH ? upstream_get(assist) : -1;
+    return up >= 0 ? up : atomic_load_explicit(&enabled[assist], memory_order_relaxed);
 }
 void local_assist_set(int assist, int value) {
-    if (assist >= 0 && assist < LOCAL_ASSIST_COUNT) atomic_store_explicit(&enabled[assist], !!value, memory_order_relaxed);
+    if (assist < 0 || assist >= LOCAL_ASSIST_COUNT) return;
+    atomic_store_explicit(&enabled[assist], !!value, memory_order_relaxed);
+    if (upstream_set) upstream_set(assist, !!value);
 }
 const char *local_assist_name(int assist) { return assist >= 0 && assist < LOCAL_ASSIST_COUNT ? names[assist] : "unknown"; }
 int local_assist_find(const char *name) {
@@ -35,6 +49,12 @@ static atomic_int g_health = -1;     // the last stored player health (quarter h
 static atomic_uint g_deaths;          // stores that took Link from above zero to zero (companion apps)
 int local_health_last(void) { return atomic_load_explicit(&g_health, memory_order_relaxed); }
 unsigned local_death_count(void) { return atomic_load_explicit(&g_deaths, memory_order_relaxed); }
+
+// Link's life after upstream's own life patch (tools/local_assists.py wraps it): observed only, never changed.
+void rt_local_health_seen(uint32_t before, uint32_t after) {
+    if ((int32_t)before > 0 && after == 0) atomic_fetch_add_explicit(&g_deaths, 1, memory_order_relaxed);
+    if ((int32_t)after >= 0) atomic_store_explicit(&g_health, (int)after, memory_order_relaxed);
+}
 
 uint32_t rt_local_health(uint32_t current, uint32_t requested) {
     uint32_t result = requested;
