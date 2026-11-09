@@ -66,6 +66,8 @@ SITES = [
     # Native map pins (1.9.0): the map manager and its world-position placement method.
     Site('scope_pin_manager', 'ref', '90000016/9f00001f f94002c8/ffc003ff f9435515 911a8109 eb0902bf 54000001/ff00001f 52800541 aa1403e0', 1),
     Site('scope_pin_place', 'code', 'd10103ff a9027bfd a9034ff4 910083fd b9000be1 528005a9 aa0203f3 b9400be8', 0),
+    # Its pin-specific save-list update follows the native state change by 39 words.
+    Site('scope_pin_remove', 'code', '1e211000 91014260 94000000/fc000000 90000015/9f00001f f94002b4/ffc003ff f9435688 911a8280', -39),
     # Experimental dual binding cells. Every pattern must match; no KNOWN fallback.
     Site('opt_two_redraw', 'code', 'd10103ff a9017bfd a90257f6 a9034ff4 910043fd 90000009/9f00001f 91000129/ffc003ff b9405008', 0),
     Site('opt_two_select', 'code', 'b976b008 7100051f 5400000b/ff00001f a9be7bfd a9014ff4 910003fd 9000000b/9f00001f 9100016b/ffc003ff', 0),
@@ -360,7 +362,7 @@ SITES = [
 # Without them the mouse turns the camera through the right stick, as before (runtime/hle/input.c); without the
 # second group it turns it without the game's camera inversion options.
 OPTIONAL_GROUPS = [
-    ('scope_pin_manager', 'scope_pin_place'),
+    ('scope_pin_manager', 'scope_pin_place', 'scope_pin_remove'),
     ('quick_drop_tick', 'quick_drop_actor_call', 'player_drop_forbidden', 'actor_info_lookup',
      'actor_info_has_tag', 'pouch_discard', 'player_equipment', 'pouch_default_name',
      'player_schedule_equip', 'pouch_equipped_snapshot', 'actor_index_assign', 'actor_index_resolve',

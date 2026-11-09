@@ -36,6 +36,7 @@
 #define GAME_SITES_OPTIONAL(X) \
     X(scope_pin_manager) \
     X(scope_pin_place) \
+    X(scope_pin_remove) \
     X(pouch_lock)             /* native recursive inventory mutex */ \
     X(pouch_unlock)           \
     X(pouch_page_count)       /* entries on an inventory page */ \
