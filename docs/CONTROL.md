@@ -55,8 +55,8 @@ often the player's health reached zero since start), so a companion can mark whe
 | `camera` | where the world camera is (`x y z`) and which way it looks (`dx dy dz`, unit vector; `yaw` and `pitch` in degrees: yaw 0 looks along +z and 90 along +x, pitch positive looks up). Read only, works in any AA mode: it uses the renderer's TAA view matrix when there is one, otherwise the game's stored camera. The stored camera reports its stored eye position, which can differ from the drawn one by about two metres; the direction is the same. An error before a world is loaded |
 | `get [key]` | the current settings, or one; keys are `Settings` field names, plus `window_size`, `fps` (`fps_limit`), `left_stick_deadzone` and `right_stick_deadzone`. Enum values use lowercase names; values are the configured ones (environment overrides and hardware fallbacks still apply). Read only |
 | `state` | frame number, uptime, fps over the last second and the hour of the day (left out before a world exists) |
-| `notify [--seconds 2-30] [--from <name>] <text> | clear` | show a short message (up to 280 bytes, default 8 s) at the top centre of the screen, up to three at a time. Display only (`runtime/companion.c`, drawn by `runtime/ui/companion_overlay.mm`) |
-| `beacon <x> <z> [name] | clear` | show a destination line under the messages: its name, the distance from Link and an arrow that turns with the camera. `beacon` alone reports the current one. Display only |
+| `notify [--seconds 2-30] [--from <name>] <text> \| clear` | show a short message (up to 280 bytes, default 8 s) at the top centre of the screen, up to three at a time. Display only (`runtime/companion.c`, drawn by `runtime/ui/companion_overlay.mm`) |
+| `beacon <x> <z> [name] \| clear` | show a destination line under the messages: its name, the distance from Link and an arrow that turns with the camera. `beacon` alone reports the current one. Display only |
 | `exit` | end the game: the console closes the window the normal way, the socket exits at once |
 
 ## Developer commands
