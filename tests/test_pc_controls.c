@@ -23,6 +23,7 @@ static int relative_changes, visibility_changes;
 static uint64_t now = 1000000000;
 
 bool pc_cursor_active(void) { return pointer_ui; }
+bool pc_cursor_blocks_pause(void) { return false; }
 bool pc_cursor_hide_system(void) { return map_pointer; }
 bool pc_cursor_map_navigation(void) { return map_pointer; }
 bool pc_cursor_rotate_drag(void) { return rotate_drag; }

@@ -1060,6 +1060,7 @@ uint64_t input_buttons_now(void) {
     if (!muted && !framepace_title_ui() && !framepace_menu_ui() && !pc_cursor_active())
         raw = act_gameplay_buttons(raw, game_key, host_buttons);
     uint64_t b = raw | (muted ? 0 : escape_buttons) | script_buttons;
+    if (pc_cursor_blocks_pause()) b &= ~(1ull << BTN_PLUS);  // (a shop or conversation ignores the pause button, as on the console)
     control_input_apply(&b, NULL, NULL, NULL, NULL);
     return b;
 }
@@ -1102,6 +1103,7 @@ static void fill_state(Cpu *c) {
         if (g_inject_plus > 0) { until = renderer_present_count() + 10; g_inject_plus = 0; }
         if (renderer_present_count() < until) b |= 1ull << BTN_PLUS;
     }
+    if (pc_cursor_blocks_pause()) b &= ~(1ull << BTN_PLUS);  // (a shop or conversation ignores the pause button, as on the console)
     // (the sticks of a controller without a gyroscope turning a shrine apparatus move neither Link nor the camera
     // meanwhile; with one, the game keeps them as on the console)
     bool sticks = !menu && !(dualstick_on() && !motion_has_sensors());

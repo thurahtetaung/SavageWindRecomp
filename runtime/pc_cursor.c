@@ -114,6 +114,13 @@ static bool enabled(void) {
 bool pc_cursor_enabled(void) { return enabled(); }
 extern bool menu_cursor_free(void);
 bool pc_cursor_active(void) { return enabled() && active && (focused || pointer_test()) && !menu_cursor_free(); }
+// A shop keeps its dialog on screen behind the pause menu, so both guide bars showed. The game on the console ignores
+// the pause button during a conversation or a shop: hold it back while one is up and no menu is open (once it is
+// open, Plus still closes it, so this cannot trap the player).
+bool pc_cursor_blocks_pause(void) {
+    return (shop_screen || dialogue_active) && g_site.pause_state &&
+           *(const uint32_t *)(uintptr_t)g_site.pause_state == 0;
+}
 bool pc_cursor_preview_active(void) { return pc_cursor_active()&&preview_available; }
 bool pc_cursor_map_navigation(void) { return pc_cursor_active() && map_canvas_active && !pointer_gamepad_input; }
 bool pc_cursor_sensor_active(void) { return pc_cursor_map_navigation(); }

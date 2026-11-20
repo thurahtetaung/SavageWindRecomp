@@ -4,6 +4,7 @@
 #include "cpu.h"
 bool pc_cursor_enabled(void);
 bool pc_cursor_active(void);
+bool pc_cursor_blocks_pause(void);
 bool pc_cursor_preview_active(void);
 bool pc_cursor_event(const SDL_Event *e);
 void pc_cursor_window(SDL_Window *window);
