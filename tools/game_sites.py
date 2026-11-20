@@ -297,6 +297,9 @@ SITES = [
     Site('act_hold', 'code', PAD_QUERY + ' b9411e68', 0),
     Site('act_trig', 'code', PAD_QUERY + ' b9401268', 0),
     Site('act_masks', 'ref', PAD_QUERY + ' b9401268', 5),
+    # Return from the Jump query in the mounted dismount path (runtime/hle/bindings.c).
+    Site('horse_jump_input_ret', 'code', '0a000388 7100051f 54000000/ff00001f 34000015/ff00001f '
+         'f9400348 90000005/9f00001f 52800041 aa1f03e2', 0),
     # The airborne shield-surf check's return from the held Shield bash input (runtime/hle/bindings.c).
     Site('shield_surf_input_ret', 'code', '528001a1 f94be900 94000000/fc000000 36000000/fff8001f '
          'f9400668 528000a1 f94be900 94000000/fc000000 37000000/fff8001f 2a1f03e0 f94013f3 a9417bfd', 8),
@@ -433,6 +436,7 @@ OPTIONAL_GROUPS = [
     ('tree_ranges',),
     ('act_hold', 'act_trig', 'act_masks'),
     ('shield_surf_input_ret',),
+    ('horse_jump_input_ret',),
     ('pouch_remove_arrows',),
     ('no_wear_store',),
     ('no_wear_hit', 'no_wear_ret'),
@@ -577,6 +581,7 @@ KNOWN = {
         'cam_stick_end': 0x7000d5801c,
         'horse_cam_lr': 0x7000c29000,
         'shield_surf_input_ret': 0x7000cb37e0,
+        'horse_jump_input_ret': 0x7000cb7690,
         'cam_pitch_chase': 0x7000bf5334,
         'cam_pitch_surf': 0x7000c1a52c,
         'cam_pitch_wakeboard': 0x7000c22104,

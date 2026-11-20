@@ -668,7 +668,7 @@ static _Atomic uint64_t a_hud_prompt_until, a_dialogue_until;
 static _Atomic uint64_t a_prompt_latch;
 enum JumpPromptPriority { JUMP_PROMPT_DEFAULT, JUMP_PROMPT_MOVEMENT, JUMP_PROMPT_INTERACT };
 static _Atomic enum JumpPromptPriority a_jump_prompt_priority;
-static _Atomic bool a_surf_square;
+static _Atomic bool a_guard_held, a_surf_square;
 
 // id would answer through Interact's button although the game puts it on another Switch button
 static bool shares_interact(int id) {
@@ -713,6 +713,7 @@ void act_poll(bool live, bool raw_guard_held, bool square_held, bool riding_hors
     else if (guarding)
         priority = JUMP_PROMPT_MOVEMENT;  // on foot: the shared button starts a surf jump or dodge
     a_jump_prompt_priority = priority;
+    a_guard_held = guarding;
     a_surf_square = guarding && !riding_horse && square_held;
     if (!live) {
         a_hud_prompt_until = a_dialogue_until = 0;
@@ -760,6 +761,15 @@ int rt_act_query(int kind, uint64_t pad, uint64_t id, uint64_t lr, uint64_t mask
         act_refresh();
     bool custom = id < ACT_COUNT && (a_custom >> id & 1);
     if (act_log_on()) act_log_query(kind, pad, (unsigned)id, lr, custom && a_live);
+    // Targeting an NPC can switch away from CameraHorse. The native jump-dismount caller still identifies
+    // the mounted context, so its shared Jump/Interact press belongs to Talk while guard is held.
+    if (a_live && a_guard_held && kind == 1 && id == 2 && g_site.horse_jump_input_ret &&
+        lr == g_site.horse_jump_input_ret && shares_interact(2)) {
+        a_served = true;
+        if ((a_hold | a_trig) & (1ull << 2)) a_prompt_latch |= 1ull << 2;
+        if (act_log_on() && (a_hold & (1ull << 2))) LOG("[act] Suppressed jump-dismount while targeting\n");
+        return 0;
+    }
     // Only the native airborne surf check sees Square as a shield input. The normal attack
     // and ground parry queries still resolve through their configured actions.
     if (a_live && a_surf_square && kind == 0 && id == 5 && g_site.shield_surf_input_ret &&

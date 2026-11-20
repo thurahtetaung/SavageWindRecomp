@@ -624,6 +624,33 @@ static void mounted_guard_reserves_the_shared_button_for_talk(void) {
     reset_bindings();
 }
 
+static void mounted_talk_survives_a_target_camera_change(void) {
+    reset_bindings();
+    act_set(BIND_DEV_PAD, 0, SDL_GAMEPAD_BUTTON_SOUTH);
+    act_set(BIND_DEV_PAD, JUMP, SDL_GAMEPAD_BUTTON_SOUTH);
+    g_site.horse_jump_input_ret = 0x9876;
+    uint64_t table = (uint64_t)(uintptr_t)masks;
+    uint32_t cross = 1u << SDL_GAMEPAD_BUTTON_SOUTH;
+    host(0, 0, 0);
+    act_poll(false, false, false, false);
+    act_poll(true, true, false, false);  // the targeting camera is active
+    host(0, 0, cross);
+    act_poll(true, true, false, false);
+    assert(trig(0) == 1 && trig(JUMP) == 1);  // unrelated callers still see Jump
+    assert(rt_act_query(1, 0, JUMP, 0x9876, table) == 0);
+    act_poll(true, false, false, true);
+    assert(hold(JUMP) == 0 && trig(JUMP) == 0);
+    host(0, 0, 0);
+    act_poll(true, false, false, true);
+    host(0, 0, cross);
+    act_poll(true, false, false, true);
+    assert(rt_act_query(1, 0, JUMP, 0x9876, table) == 1);
+    host(0, 0, 0);
+    act_poll(true, false, false, true);
+    g_site.horse_jump_input_ret = 0;
+    reset_bindings();
+}
+
 static void square_answers_only_the_guarded_surf_query(void) {
     reset_bindings();
     act_set(BIND_DEV_PAD, 5, SDL_GAMEPAD_BUTTON_TOUCHPAD);
@@ -668,6 +695,7 @@ int main(void) {
     names_and_groups();
     dialogue_owns_a_shared_jump_press();
     mounted_guard_reserves_the_shared_button_for_talk();
+    mounted_talk_survives_a_target_camera_change();
     square_answers_only_the_guarded_surf_query();
     puts("action bindings: default fallthrough, custom host bindings, schema migration, held / pressed, menus, shared keys, pad capture, contexts, reset and ini passed");
     return 0;
