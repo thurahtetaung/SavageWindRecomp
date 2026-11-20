@@ -553,7 +553,8 @@ static void gear_scan(void) {
         call.sp -= 0x100;
         int tabs = (int32_t)rd32(mgr + 0x44498);
         if (tabs < 0 || tabs > 64) tabs = 0;
-        if (g_site.pouch_lock) gear_call(&call, g_site.pouch_lock, mgr + 0x28, 0, 0);
+        bool locked = g_site.pouch_lock && g_site.pouch_unlock;  // (never take a lock we cannot release)
+        if (locked) gear_call(&call, g_site.pouch_lock, mgr + 0x28, 0, 0);
         for (int tab = 0; tab < tabs && n < GEAR_MAX; tab++) {
             int count = (int32_t)gear_call(&call, g_site.pouch_page_count, mgr, (uint64_t)tab, 0);
             if (count <= 0 || count > 40) continue;
@@ -572,7 +573,7 @@ static void gear_scan(void) {
                 n++;
             }
         }
-        if (g_site.pouch_unlock) gear_call(&call, g_site.pouch_unlock, mgr + 0x28, 0, 0);
+        if (locked) gear_call(&call, g_site.pouch_unlock, mgr + 0x28, 0, 0);
     }
     pthread_mutex_lock(&g_gear_lock);
     memcpy(g_gear, items, (size_t)n * sizeof *items);
