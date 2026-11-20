@@ -297,6 +297,9 @@ SITES = [
     Site('act_hold', 'code', PAD_QUERY + ' b9411e68', 0),
     Site('act_trig', 'code', PAD_QUERY + ' b9401268', 0),
     Site('act_masks', 'ref', PAD_QUERY + ' b9401268', 5),
+    # The airborne shield-surf check's return from the held Shield bash input (runtime/hle/bindings.c).
+    Site('shield_surf_input_ret', 'code', '528001a1 f94be900 94000000/fc000000 36000000/fff8001f '
+         'f9400668 528000a1 f94be900 94000000/fc000000 37000000/fff8001f 2a1f03e0 f94013f3 a9417bfd', 8),
     # the store of an equipped weapon's, bow's or shield's durability, x100 (tools/patches.py _no_wear; from #296: the
     # setter 1.8.2 0x7000c809e8 finds the equipped item of a type w22 in the pouch and stores the new value w20)
     Site('no_wear_store', 'code', 'b9002174 5288fb08 72a00088 38686aa8 35000008/ff00001f 2a1403e0 2a1f03e2 '
@@ -429,6 +432,7 @@ OPTIONAL_GROUPS = [
      'grass_blade_lateral_far'),
     ('tree_ranges',),
     ('act_hold', 'act_trig', 'act_masks'),
+    ('shield_surf_input_ret',),
     ('pouch_remove_arrows',),
     ('no_wear_store',),
     ('no_wear_hit', 'no_wear_ret'),
@@ -572,6 +576,7 @@ KNOWN = {
         'cam_stick': 0x7000d57fe0,
         'cam_stick_end': 0x7000d5801c,
         'horse_cam_lr': 0x7000c29000,
+        'shield_surf_input_ret': 0x7000cb37e0,
         'cam_pitch_chase': 0x7000bf5334,
         'cam_pitch_surf': 0x7000c1a52c,
         'cam_pitch_wakeboard': 0x7000c22104,

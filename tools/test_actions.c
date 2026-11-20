@@ -46,7 +46,7 @@ static void defaults_are_untouched(void) {
     }
     act_masks(masks);
     host(1ull << BIND_X, 1ull << BIND_X, 1u << SDL_GAMEPAD_BUTTON_NORTH);
-    act_poll(true);
+    act_poll(true, false, false, false);
     for (int id = 0; id < ACT_COUNT; id++) assert(hold(id) == -1 && trig(id) == -1);
     host(0, 0, 0);
     assert(rt_act_query(0, 0, 41, 0, 0) == -1 && rt_act_query(1, 0, 4000000000ull, 0, 0) == -1);
@@ -55,34 +55,34 @@ static void defaults_are_untouched(void) {
 static void a_bound_action_follows_its_key(void) {
     act_set(BIND_DEV_KEY, JUMP, SDL_SCANCODE_G);
     assert(!act_is_default(JUMP) && act_is_default(ATTACK));
-    act_poll(true);
+    act_poll(true, false, false, false);
     assert(hold(JUMP) == 0 && trig(JUMP) == 0);
     assert(hold(ATTACK) == -1);  // factory-default actions leave the game in control
     key_down[SDL_SCANCODE_G] = 1;
     host(0, 0, 0);
-    act_poll(true);
+    act_poll(true, false, false, false);
     assert(hold(JUMP) == 1 && trig(JUMP) == 1);
-    act_poll(true);  // still down; the press was read
+    act_poll(true, false, false, false);  // still down; the press was read
     assert(hold(JUMP) == 1 && trig(JUMP) == 0);
     key_down[SDL_SCANCODE_G] = 0;
     host(0, 0, 0);
-    act_poll(true);
+    act_poll(true, false, false, false);
     assert(hold(JUMP) == 0 && trig(JUMP) == 0);
     // the Switch layer's key for the same button no longer reaches the action: Space is X, but Jump left X
     host(1ull << BIND_X, 0, 0);
-    act_poll(true);
+    act_poll(true, false, false, false);
     assert(hold(JUMP) == 0);
 }
 
 static void a_press_is_not_lost_when_nobody_asked(void) {
     key_down[SDL_SCANCODE_G] = 1;
     host(0, 0, 0);
-    act_poll(true);   // pressed here, but the game does not ask before the next poll
+    act_poll(true, false, false, false);   // pressed here, but the game does not ask before the next poll
     key_down[SDL_SCANCODE_G] = 0;
     host(0, 0, 0);
-    act_poll(true);
+    act_poll(true, false, false, false);
     assert(trig(JUMP) == 1);  // still delivered once
-    act_poll(true);
+    act_poll(true, false, false, false);
     assert(trig(JUMP) == 0);
 }
 
@@ -91,34 +91,34 @@ static void a_press_is_not_lost_when_nobody_asked(void) {
 static void a_press_nobody_asked_about_expires(void) {
     key_down[SDL_SCANCODE_G] = 1;
     host(0, 0, 0);
-    act_poll(true);
+    act_poll(true, false, false, false);
     key_down[SDL_SCANCODE_G] = 0;
     host(0, 0, 0);
-    for (int i = 0; i < 10; i++) now += 50, act_poll(true);  // 500 ms of polls nobody read
+    for (int i = 0; i < 10; i++) now += 50, act_poll(true, false, false, false);  // 500 ms of polls nobody read
     assert(trig(JUMP) == 0);
 }
 
 static void menus_use_the_switch_layer(void) {
     key_down[SDL_SCANCODE_G] = 1;
     host(0, 0, 0);
-    act_poll(false);
+    act_poll(false, false, false, false);
     assert(hold(JUMP) == -1 && trig(JUMP) == -1);
-    act_poll(true);  // held through the menu closing: held, not newly pressed
+    act_poll(true, false, false, false);  // held through the menu closing: held, not newly pressed
     assert(hold(JUMP) == 1 && trig(JUMP) == 0);
     key_down[SDL_SCANCODE_G] = 0;
     host(0, 0, 0);
-    act_poll(true);
+    act_poll(true, false, false, false);
 }
 
 static void two_actions_share_a_key(void) {
     act_set(BIND_DEV_KEY, ATTACK, SDL_SCANCODE_G);
     key_down[SDL_SCANCODE_G] = 1;
     host(0, 0, 0);
-    act_poll(true);
+    act_poll(true, false, false, false);
     assert(hold(JUMP) == 1 && hold(ATTACK) == 1 && trig(JUMP) == 1 && trig(ATTACK) == 1);
     key_down[SDL_SCANCODE_G] = 0;
     host(0, 0, 0);
-    act_poll(true);
+    act_poll(true, false, false, false);
     assert(hold(JUMP) == 0 && hold(ATTACK) == 0);
     act_set(BIND_DEV_KEY, ATTACK, ACT_FOLLOW);
     assert(act_is_default(ATTACK));
@@ -128,67 +128,67 @@ static void the_default_side_keeps_its_factory_binding(void) {
     // Jump has a key of its own; its controller side is left at the default, which is the Switch button X
     assert(g_act_pad[JUMP] == SDL_GAMEPAD_BUTTON_NORTH);
     host(0, 0, 1u << SDL_GAMEPAD_BUTTON_NORTH);
-    act_poll(true);
+    act_poll(true, false, false, false);
     assert(hold(JUMP) == 1);
     host(0, 0, 1u << SDL_GAMEPAD_BUTTON_WEST);  // Attack's default
-    act_poll(true);
+    act_poll(true, false, false, false);
     assert(hold(JUMP) == 0);
     // ... or a controller button of its own
     act_set(BIND_DEV_PAD, JUMP, SDL_GAMEPAD_BUTTON_LEFT_SHOULDER);
     host(0, 1ull << BIND_X, 0);
-    act_poll(true);
+    act_poll(true, false, false, false);
     assert(hold(JUMP) == 0);  // X no longer jumps
     host(0, 0, 1u << SDL_GAMEPAD_BUTTON_LEFT_SHOULDER);
-    act_poll(true);
+    act_poll(true, false, false, false);
     assert(hold(JUMP) == 1);
     // ... or none
     act_set(BIND_DEV_PAD, JUMP, ACT_NONE);
     host(0, 0, 1u << SDL_GAMEPAD_BUTTON_LEFT_SHOULDER);
-    act_poll(true);
+    act_poll(true, false, false, false);
     assert(hold(JUMP) == 0);
     act_set(BIND_DEV_PAD, JUMP, ACT_FOLLOW);
     assert(!act_is_default(JUMP));  // the changed key still keeps both host sides active
     host(0, 0, 1u << SDL_GAMEPAD_BUTTON_NORTH);
-    act_poll(true);
+    act_poll(true, false, false, false);
     assert(hold(JUMP) == 1);
     act_set(BIND_DEV_KEY, JUMP, ACT_FOLLOW);
     assert(act_is_default(JUMP));
     host(0, 0, 0);
-    act_poll(true);
+    act_poll(true, false, false, false);
     assert(hold(JUMP) == -1 && trig(JUMP) == -1);
 }
 
 static void a_pad_only_override_uses_both_host_sides(void) {
     act_set(BIND_DEV_PAD, JUMP, SDL_GAMEPAD_BUTTON_LEFT_SHOULDER);
     host(1ull << BIND_X, 1ull << BIND_X, 0);
-    act_poll(true);
+    act_poll(true, false, false, false);
     assert(hold(JUMP) == 0);  // custom on one device means raw Switch state is ignored on both
     key_down[SDL_SCANCODE_SPACE] = 1;
     host(0, 0, 0);
-    act_poll(true);
+    act_poll(true, false, false, false);
     assert(hold(JUMP) == 1 && trig(JUMP) == 1);  // unchanged keyboard side uses its factory host key
     key_down[SDL_SCANCODE_SPACE] = 0;
     host(0, 0, 1u << SDL_GAMEPAD_BUTTON_LEFT_SHOULDER);
-    act_poll(true);
+    act_poll(true, false, false, false);
     assert(hold(JUMP) == 1);
     bind_reset_slot(BIND_ACTION + JUMP);
     assert(hold(JUMP) == -1 && trig(JUMP) == -1);
     act_set(BIND_DEV_PAD, JUMP, ACT_NONE);
     host(0, 0, 0);
-    act_poll(true);
+    act_poll(true, false, false, false);
     assert(hold(JUMP) == 0);
     act_reset();
-    act_poll(true);
+    act_poll(true, false, false, false);
     assert(hold(JUMP) == -1 && trig(JUMP) == -1);
     assert(bind_settings_load("act_key_2", "G"));
     key_down[SDL_SCANCODE_G] = 1;
     host(0, 0, 0);
-    act_poll(true);
+    act_poll(true, false, false, false);
     assert(hold(JUMP) == 1 && trig(JUMP) == 1);
     key_down[SDL_SCANCODE_G] = 0;
     act_reset();
     host(0, 0, 0);
-    act_poll(true);
+    act_poll(true, false, false, false);
     assert(hold(JUMP) == -1 && trig(JUMP) == -1);
 }
 
@@ -312,7 +312,7 @@ static void migration_and_independent_defaults(void) {
     char legacy[] = "bind_key_x = H\nbind_pad_x = south\nact_key_11 = G\nact_pad_11 = none\n";
     load_bindings(legacy);
     host(0, 0, 0);
-    act_poll(true);
+    act_poll(true, false, false, false);
     assert(hold(JUMP) == 0);  // migration refreshed the custom-action gate
     assert(g_bind_key[BIND_X] == SDL_SCANCODE_H && g_bind_pad[BIND_X] == SDL_GAMEPAD_BUTTON_SOUTH);
     assert(g_act_key[JUMP] == SDL_SCANCODE_H && g_act_pad[JUMP] == SDL_GAMEPAD_BUTTON_SOUTH);
@@ -377,7 +377,7 @@ static void schema_migration_is_one_time(void) {
         assert(g_act_key[JUMP] == SDL_SCANCODE_SPACE && g_act_pad[JUMP] == SDL_GAMEPAD_BUTTON_NORTH);
         assert(g_act_key[19] == SDL_SCANCODE_H && g_act_pad[19] == SDL_GAMEPAD_BUTTON_SOUTH);
         host(0, 0, 0);
-        act_poll(true);
+        act_poll(true, false, false, false);
         assert(hold(JUMP) == -1 && trig(JUMP) == -1 && hold(19) == 0);
         char *again = save_bindings();
         assert(!strcmp(saved, again));
@@ -530,31 +530,31 @@ static void swapped_jump_sprint_masks_keep_keyboard_bindings(void) {
     masks[2] = 0x2;   // BOTW JumpButtonChange: Jump -> B
     masks[12] = 0x8;  // Sprint -> X
     assert(act_is_default(2) && act_is_default(12));
-    act_poll(true);
+    act_poll(true, false, false, false);
     assert(hold(2) == 0 && hold(12) == 0);
     // Keyboard still follows its configured bindings (Space = Jump, Left Shift = Sprint)
     key_down[SDL_SCANCODE_SPACE] = 1;
     host(0, 0, 0);
-    act_poll(true);
+    act_poll(true, false, false, false);
     assert(hold(2) == 1 && trig(2) == 1 && hold(12) == 0 && trig(12) == 0);
     key_down[SDL_SCANCODE_SPACE] = 0;
     key_down[SDL_SCANCODE_LSHIFT] = 1;
     host(0, 0, 0);
-    act_poll(true);
+    act_poll(true, false, false, false);
     assert(hold(2) == 0 && trig(2) == 0 && hold(12) == 1 && trig(12) == 1);
     key_down[SDL_SCANCODE_LSHIFT] = 0;
     // Uncustomized controller still follows the game's swapped Switch layout (B = Jump, X = Sprint)
     host(0, 0, 1u << g_bind_pad[BIND_B]);
-    act_poll(true);
+    act_poll(true, false, false, false);
     assert(hold(2) == 1 && trig(2) == 1 && hold(12) == 0 && trig(12) == 0);
     host(0, 0, 1u << g_bind_pad[BIND_X]);
-    act_poll(true);
+    act_poll(true, false, false, false);
     assert(hold(2) == 0 && trig(2) == 0 && hold(12) == 1 && trig(12) == 1);
     host(0, 0, 0);
     // Restoring the 1.9.0 masks returns both to game fallthrough (-1)
     masks[2] = 0x8;
     masks[12] = 0x2;
-    act_poll(true);
+    act_poll(true, false, false, false);
     assert(hold(2) == -1 && hold(12) == -1);
 }
 
@@ -566,35 +566,80 @@ static void dialogue_owns_a_shared_jump_press(void) {
     g_site.screen_mgr = (uint64_t)(uintptr_t)&empty_screen_manager;
     now = 10000;
     host(0, 0, 0);
-    act_poll(true);
+    act_poll(true, false, false, false);
     uint32_t cross = 1u << SDL_GAMEPAD_BUTTON_SOUTH;
     host(0, 0, cross);
-    act_poll(true);
+    act_poll(true, false, false, false);
     assert(hold(JUMP) == 1 && trig(JUMP) == 1);
     assert(act_gameplay_buttons(0, held, cross) & (1ull << BIND_X));
     host(0, 0, 0);
-    act_poll(true);
+    act_poll(true, false, false, false);
     dialogue = true;
     host(0, 0, cross);
-    act_poll(true);
+    act_poll(true, true, false, false);
     assert(hold(0) == 1 && trig(0) == 1);  // dialogue can still advance
     assert(hold(JUMP) == 0 && trig(JUMP) == 0);
     uint64_t buttons = act_gameplay_buttons(0, held, cross);
     assert((buttons & (1ull << BIND_A)) && !(buttons & (1ull << BIND_X)));
     dialogue = false;
     now += 1000;  // closing grace expired, but the final dialogue press is held
-    act_poll(true);
+    act_poll(true, false, false, false);
     assert(hold(JUMP) == 0 && trig(JUMP) == 0);
     assert(!(act_gameplay_buttons(0, held, cross) & (1ull << BIND_X)));
     host(0, 0, 0);
-    act_poll(true);
+    act_poll(true, false, false, false);
     assert(trig(JUMP) == 0);  // no buffered jump on release
     host(0, 0, cross);
-    act_poll(true);
+    act_poll(true, false, false, false);
     assert(hold(JUMP) == 1 && trig(JUMP) == 1);  // a fresh press jumps again
     host(0, 0, 0);
-    act_poll(true);
+    act_poll(true, false, false, false);
     g_site.screen_mgr = 0;
+    reset_bindings();
+}
+
+static void mounted_guard_reserves_the_shared_button_for_talk(void) {
+    reset_bindings();
+    act_set(BIND_DEV_PAD, 0, SDL_GAMEPAD_BUTTON_SOUTH);
+    act_set(BIND_DEV_PAD, JUMP, SDL_GAMEPAD_BUTTON_SOUTH);
+    uint32_t cross = 1u << SDL_GAMEPAD_BUTTON_SOUTH;
+    host(0, 0, 0);
+    act_poll(false, false, false, false);
+    act_poll(true, true, false, true);
+    host(0, 0, cross);
+    act_poll(true, true, false, true);
+    assert(trig(0) == 1 && trig(JUMP) == 0);
+    uint64_t buttons = act_gameplay_buttons(0, held, cross);
+    assert((buttons & (1ull << BIND_A)) && !(buttons & (1ull << BIND_X)));
+    act_poll(true, false, false, true);  // releasing L2 while Cross is down cannot jump off
+    assert(hold(JUMP) == 0 && trig(JUMP) == 0);
+    host(0, 0, 0);
+    act_poll(true, false, false, true);
+    host(0, 0, cross);
+    act_poll(true, false, false, true);
+    assert(trig(JUMP) == 1);
+    assert(act_gameplay_buttons(0, held, cross) & (1ull << BIND_X));
+    host(0, 0, 0);
+    act_poll(true, false, false, true);
+    reset_bindings();
+}
+
+static void square_answers_only_the_guarded_surf_query(void) {
+    reset_bindings();
+    act_set(BIND_DEV_PAD, 5, SDL_GAMEPAD_BUTTON_TOUCHPAD);
+    g_site.shield_surf_input_ret = 0x5678;
+    uint64_t table = (uint64_t)(uintptr_t)masks;
+    act_poll(true, true, true, false);
+    assert(rt_act_query(0, 0, 5, 0x5678, table) == 1);
+    assert(rt_act_query(0, 0, 5, 0x1234, table) == 0);
+    assert(rt_act_query(1, 0, 5, 0x5678, table) == 0);
+    act_poll(true, false, true, false);
+    assert(rt_act_query(0, 0, 5, 0x5678, table) == 0);
+    act_poll(true, true, true, true);
+    assert(rt_act_query(0, 0, 5, 0x5678, table) == 0);
+    act_poll(false, true, true, false);
+    assert(rt_act_query(0, 0, 5, 0x5678, table) == -1);
+    g_site.shield_surf_input_ret = 0;
     reset_bindings();
 }
 
@@ -622,6 +667,8 @@ int main(void) {
     host_pad_slots();
     names_and_groups();
     dialogue_owns_a_shared_jump_press();
+    mounted_guard_reserves_the_shared_button_for_talk();
+    square_answers_only_the_guarded_surf_query();
     puts("action bindings: default fallthrough, custom host bindings, schema migration, held / pressed, menus, shared keys, pad capture, contexts, reset and ini passed");
     return 0;
 }

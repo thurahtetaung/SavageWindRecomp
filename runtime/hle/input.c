@@ -1090,9 +1090,11 @@ static void fill_state(Cpu *c) {
 
     // Customized actions use host bindings during play. Factory-default actions and all queries in menus, with
     // the window unfocused or the overlay up, use the Switch layer, so no binding can lock the player out.
-    act_poll(!menu && !framepace_title_ui() && !framepace_menu_ui());
-    uint64_t bow = pc_bow_sample();
     bool in_menu = menu || framepace_title_ui() || framepace_menu_ui();
+    bool riding_horse = horse_riding();
+    act_poll(!in_menu, ((key_buttons | pad_buttons | script_buttons) >> BIND_ZL & 1) != 0,
+             (host_buttons & (1u << SDL_GAMEPAD_BUTTON_WEST)) != 0, riding_horse);
+    uint64_t bow = pc_bow_sample();
     uint64_t raw = menu ? 0 : (in_menu ? (key_buttons | pad_buttons) : act_gameplay_buttons(key_buttons | pad_buttons, game_key, host_buttons));
     uint64_t b = raw | (menu ? 0 : escape_buttons | bow) | script_buttons;
     if (!menu) b |= auto_continue_buttons(b);  // (not while the overlay has the controls)
@@ -1110,7 +1112,7 @@ static void fill_state(Cpu *c) {
     int32_t plx = sticks ? pad_lx : 0, ply = sticks ? pad_ly : 0, prx = sticks ? pad_rx : 0, pry = sticks ? pad_ry : 0;
     bool map_keys=pc_cursor_map_navigation();
     int32_t klx = menu || map_keys ? 0 : key_lx, kly = menu || map_keys ? 0 : key_ly;
-    if (horse_riding() && klx && kly > 0) kly = 0;
+    if (riding_horse && klx && kly > 0) kly = 0;
     int32_t lx = clamp_axis(klx + plx + script_lx);
     int32_t ly = clamp_axis(kly + ply + script_ly);
     // Gate at each poll: an arrow or Enter held when a menu closes must never move the player or press A.

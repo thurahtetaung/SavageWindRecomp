@@ -664,9 +664,11 @@ static bool interact_prompt_up(void) {
 // When the prompt was last seen (each controller poll): answering it takes it away within the same frame, before the
 // game asks about Jump, so the press that picked something up still counts as the prompt's for a moment
 #define PROMPT_GRACE_MS 250
-static _Atomic uint64_t a_prompt_ms;
+static _Atomic uint64_t a_hud_prompt_until, a_dialogue_until;
 static _Atomic uint64_t a_prompt_latch;
-static _Atomic bool a_prompt_seen;
+enum JumpPromptPriority { JUMP_PROMPT_DEFAULT, JUMP_PROMPT_MOVEMENT, JUMP_PROMPT_INTERACT };
+static _Atomic enum JumpPromptPriority a_jump_prompt_priority;
+static _Atomic bool a_surf_square;
 
 // id would answer through Interact's button although the game puts it on another Switch button
 static bool shares_interact(int id) {
@@ -680,9 +682,18 @@ static bool any_shares_interact(void) {
     return false;
 }
 
+static bool recent_interact_prompt(int id, uint64_t now) {
+    if (now < a_dialogue_until) return true;
+    if (id == 2 || id == 11) {
+        enum JumpPromptPriority priority = a_jump_prompt_priority;
+        if (priority != JUMP_PROMPT_DEFAULT) return priority == JUMP_PROMPT_INTERACT;
+    }
+    return now < a_hud_prompt_until;
+}
+
 static bool prompt_blocks_action(int id) {
-    return shares_interact(id) && ((a_prompt_latch >> id & 1) ||
-        (a_prompt_seen && SDL_GetTicks() - a_prompt_ms < PROMPT_GRACE_MS));
+    return shares_interact(id) &&
+           ((a_prompt_latch >> id & 1) || recent_interact_prompt(id, SDL_GetTicks()));
 }
 
 // ---- the controller poll and the game's queries
@@ -690,22 +701,31 @@ static bool prompt_blocks_action(int id) {
 static _Atomic uint64_t a_prev;
 static _Atomic bool a_served;  // a pressed query was answered since the last poll
 
-void act_poll(bool live) {
+void act_poll(bool live, bool raw_guard_held, bool square_held, bool riding_horse) {
     static bool was_live;
     uint64_t custom = a_custom;
     uint64_t cur = live ? (a_keys | a_pads) & custom : 0, prev = a_prev;
     uint64_t now = SDL_GetTicks();
-    if (live && any_shares_interact() && (interact_prompt_up() ||
-        (g_site.screen_mgr && framepace_dialogue_ui()))) {
-        a_prompt_ms = now;
-        a_prompt_seen = true;
+    bool guarding = live && ((custom >> 13 & 1) ? (cur >> 13 & 1) : raw_guard_held);
+    enum JumpPromptPriority priority = JUMP_PROMPT_DEFAULT;
+    if (live && riding_horse)
+        priority = guarding ? JUMP_PROMPT_INTERACT : JUMP_PROMPT_MOVEMENT;
+    else if (guarding)
+        priority = JUMP_PROMPT_MOVEMENT;  // on foot: the shared button starts a surf jump or dodge
+    a_jump_prompt_priority = priority;
+    a_surf_square = guarding && !riding_horse && square_held;
+    if (!live) {
+        a_hud_prompt_until = a_dialogue_until = 0;
+    } else if (any_shares_interact()) {
+        if (interact_prompt_up()) a_hud_prompt_until = now + PROMPT_GRACE_MS;
+        if (g_site.screen_mgr && framepace_dialogue_ui()) a_dialogue_until = now + PROMPT_GRACE_MS;
     }
     // A press used to talk belongs to the conversation until released, even if
     // its closing animation ends while the button is still held.
     uint64_t latched = a_prompt_latch & cur;
-    if (a_prompt_seen && now - a_prompt_ms < PROMPT_GRACE_MS)
+    if (priority == JUMP_PROMPT_INTERACT || now < a_hud_prompt_until || now < a_dialogue_until)
         for (int id = 1; id < ACT_COUNT; id++)
-            if ((cur >> id & 1) && shares_interact(id)) latched |= 1ull << id;
+            if ((cur >> id & 1) && recent_interact_prompt(id, now) && shares_interact(id)) latched |= 1ull << id;
     a_prompt_latch = latched;
     if (live && !was_live) prev = cur;  // held through a menu closing: not a new press
     uint64_t edge = cur & ~prev;
@@ -740,6 +760,13 @@ int rt_act_query(int kind, uint64_t pad, uint64_t id, uint64_t lr, uint64_t mask
         act_refresh();
     bool custom = id < ACT_COUNT && (a_custom >> id & 1);
     if (act_log_on()) act_log_query(kind, pad, (unsigned)id, lr, custom && a_live);
+    // Only the native airborne surf check sees Square as a shield input. The normal attack
+    // and ground parry queries still resolve through their configured actions.
+    if (a_live && a_surf_square && kind == 0 && id == 5 && g_site.shield_surf_input_ret &&
+        lr == g_site.shield_surf_input_ret && SDL_GetTicks() >= a_dialogue_until) {
+        if (act_log_on()) LOG("[act] Square answered the airborne shield-surf check\n");
+        return 1;
+    }
     if (id >= ACT_COUNT || !a_live || !custom) return -1;
     int r;
     if (kind) {

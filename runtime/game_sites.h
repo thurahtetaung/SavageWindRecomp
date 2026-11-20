@@ -69,7 +69,8 @@
     X(quick_drop_trash_prohibited) \
     X(quick_drop_actor_method) \
     X(actor_info) \
-    X(horse_cam_lr)           /* CameraHorse's return address after calling the camera stick input */
+    X(horse_cam_lr)           /* CameraHorse's return address after calling the camera stick input */ \
+    X(shield_surf_input_ret)  /* return from the native airborne shield-surf input check */
 
 typedef struct {
 #define GAME_SITE_FIELD(n) uint64_t n;

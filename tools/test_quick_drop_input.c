@@ -10,7 +10,9 @@
 #include "../runtime/quick_drop_action.c"
 
 Settings g_settings;
-void act_poll(bool live) { (void)live; }
+void act_poll(bool live, bool raw_guard_held, bool square_held, bool riding_horse) {
+    (void)live; (void)raw_guard_held; (void)square_held; (void)riding_horse;
+}
 uint64_t g_watch_lo, g_watch_hi;
 static uint64_t test_frame = 100, pointer_injection, control_injection;
 static bool game_menu = true;
