@@ -10,5 +10,5 @@ parser.add_argument('exefs', type=Path)
 args = parser.parse_args()
 sys.path.insert(0, str(root / 'tools'))
 sys.argv = ['gen.py', 'all', str(args.exefs.resolve()), str(root / 'generated'),
-            '--hle', str(root / 'runtime/hle/hle_symbols.txt'), '--simd', 'c']
+            '--hle', str(root / 'runtime/hle/hle_symbols.txt'), '--simd', 'c', '--locals']
 runpy.run_path(str(root / 'tools/gen.py'), run_name='__main__')
