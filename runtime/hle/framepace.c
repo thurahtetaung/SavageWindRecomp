@@ -332,6 +332,13 @@ static void load_watch(uint64_t t) {
     }
 }
 
+static float menu_speed_mult(void) {
+    if (!in_menu()) return 1.0f;
+    int speed = g_settings.menu_speed;
+    if (speed < 70 || speed > 300) return 1.0f;
+    return speed / 100.0f;
+}
+
 void framepace_presented(uint64_t t, bool on_grid) {
     load_watch(t);
     if (!framepace_on()) return;
@@ -347,7 +354,7 @@ void framepace_presented(uint64_t t, bool on_grid) {
     g_grid_streak = on_grid ? g_grid_streak + 1 : 0;
     static int fixed = -1;
     if (fixed < 0) fixed = env_int("SAVAGEWIND_NO_CONTROLLER_STEP", 0);
-    if (!fixed) *(float *)(uintptr_t)CONTROLLER_STEP = g_step;
+    if (!fixed) *(float *)(uintptr_t)CONTROLLER_STEP = g_step * menu_speed_mult();
 }
 
 // The menus' speed: every frame the game sets a GUI speed to its integer interval x 0.5: 1 at 30 fps, 0.5 at 60, and
@@ -357,7 +364,8 @@ void framepace_presented(uint64_t t, bool on_grid) {
 float rt_gui_speed(float game) {
     static int off = -1;
     if (off < 0) off = env_int("SAVAGEWIND_NO_GUI_SPEED", 0);
-    return off || !framepace_on() ? game : g_step;
+    float base = off || !framepace_on() ? game : g_step;
+    return base * menu_speed_mult();
 }
 
 // ------------------------------------------------------------------ the game's clock (ksys::VFR)
@@ -597,6 +605,25 @@ void rt_stale_actor(void) {
     static uint32_t n;
     uint32_t k = __atomic_add_fetch(&n, 1, __ATOMIC_RELAXED);
     if (k <= 5 || (k & (k - 1)) == 0) LOG("[game] a stale actor in the target manager was ignored (%u so far)\n", k);
+}
+
+int rt_actor_link_valid(uint64_t actor) {
+    uint64_t top = HEAP_BASE + kernel_heap_size();
+    if ((actor & 7) || actor < HEAP_BASE || actor + 0x578 > top) {
+        rt_stale_actor();
+        return 0;
+    }
+    uint64_t link = *(const uint64_t *)(uintptr_t)(actor + 0x570);
+    if ((link & 7) || link < HEAP_BASE || link + 0x90 > top) {
+        rt_stale_actor();
+        return 0;
+    }
+    uint64_t param = *(const uint64_t *)(uintptr_t)(link + 0x88);
+    if ((param & 7) || param < HEAP_BASE || param + 0x770 > top) {
+        rt_stale_actor();
+        return 0;
+    }
+    return 1;
 }
 
 // The game's frames that were presented: one step per presented frame, where game frames step twice while paused

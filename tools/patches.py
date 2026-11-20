@@ -349,22 +349,31 @@ def _surf_boost_remove(gen, a):
 # + 0x88) got a freed pointer (#391: a garbage value, a crash in the next load) and one inline copy of it
 # (1.9.0 0x7000dea400, the camera target) got an actor whose + 0x570 is null (#393: accessing 0x88). Both now treat
 # such an actor as none: the helper answers 0, the inline copy leaves its function by the path of "no target".
-def _stale_actor_helper(gen, a):
+def _stale_actor_cbz(gen, a, clear_x0):
     w = _word(gen, a)
     assert w & 0xff00001f == 0xb4000000, hex(w)  # cbz x0, <ret>
     target = a + sext((w >> 5) & 0x7ffff, 19) * 4
-    return ('{ extern void rt_stale_actor(void); '
+    clear = 'c->x[0] = 0; ' if clear_x0 else ''
+    return ('{ extern int rt_actor_link_valid(uint64_t); '
             'if (!c->x[0]) goto L_%x; '
-            'if (c->x[0] - 0x7000000000ull >= 0x320000000ull || !LD64(c->x[0] + 0x570)) { rt_stale_actor(); c->x[0] = 0; goto L_%x; } }'
-            % (target, target))
+            'if (!rt_actor_link_valid(c->x[0])) { %sgoto L_%x; } }'
+            % (target, clear, target))
+
+
+def _stale_actor_helper(gen, a):
+    return _stale_actor_cbz(gen, a, True)
+
+
+def _stale_actor_kind(gen, a):
+    return _stale_actor_cbz(gen, a, False)
 
 
 def _stale_actor_target(gen, a):
     assert _word(gen, a) == 0xf942ba68, hex(_word(gen, a))  # ldr x8, [x19, #0x570]
     # the epilogue of "no target": the function's own early exit (cbz x0 / cbnz x19 above this site)
     exit_at = _stale_target_exit(gen, a)
-    return ('{ extern void rt_stale_actor(void); '
-            'if (c->x[19] - 0x7000000000ull >= 0x320000000ull || !LD64(c->x[19] + 0x570)) { rt_stale_actor(); goto L_%x; } '
+    return ('{ extern int rt_actor_link_valid(uint64_t); '
+            'if (!rt_actor_link_valid(c->x[19])) { goto L_%x; } '
             'c->x[8] = LD64(c->x[19] + 0x570); }' % exit_at)
 
 
@@ -929,6 +938,19 @@ def _gyro_scene_actor(gen, a):
 # isHold(pad, action) and isTrig(pad, action): each looks the action's pad mask up in a table of 41 (act_masks) and tests
 # it against the pad object's held (+0x11c) or pressed (+0x10) word. An action the player gave a binding of its own is
 # answered by the runtime from the host key / button instead (rt_act_query); every other answer stays the game's.
+# Controls > Menus wrap around (runtime/menu_wrap.c): the UI focus search (1.9.0 0x7000f58404, called when the focused
+# button has no neighbour link that way) ends with `mov x0, x20`, its result: the nearest focusable button roughly the
+# way pressed, or none at the end of a list. With x19 the control and w22 the direction, the runtime may answer with the
+# button farthest the other way instead.
+def _menu_wrap(gen, a):
+    assert _word(gen, a) == 0xaa1403e0, hex(_word(gen, a))  # mov x0, x20
+    return ('{ extern uint64_t rt_menu_wrap(Cpu *, uint64_t, uint64_t, uint32_t); '
+            # (the guest sp is still in sp_ here: the runtime calls the game's functions on it)
+            'uint64_t sp_saved = c->sp; c->sp = sp_; '
+            'c->x[0] = rt_menu_wrap(c, c->x[20], c->x[19], (uint32_t)c->x[22]); c->sp = sp_saved; }'
+            f'  /* {a:#x}: mov x0, x20 (UI focus search result: menus wrap around) */')
+
+
 def _act_query(kind):
     def patch(gen, a):
         assert _word(gen, a) == 0xa9be7bfd, hex(_word(gen, a))  # stp x29, x30, [sp, #-0x20]!
@@ -1017,6 +1039,7 @@ PATCHES = {
     'surf_boost_remove': _surf_boost_remove,
     'surf_jump_request': _surf_jump_request,
     'stale_actor_helper': _stale_actor_helper,
+    'stale_actor_kind': _stale_actor_kind,
     'stale_actor_target': _stale_actor_target,
     'phys_solver_steps': _solver_steps,
     'kf_angle': _kf_angle,
@@ -1059,6 +1082,7 @@ PATCHES = {
     'grass_blade_lateral_near': _grass_blade_lateral,
     'grass_blade_lateral_far': _grass_blade_lateral,
     'tree_ranges': _tree_ranges,
+    'menu_wrap': _menu_wrap,
     'act_hold': _act_query(0),
     'act_trig': _act_query(1),
     'pouch_remove_arrows': _remove_arrows,
