@@ -58,6 +58,16 @@ static const struct { uint64_t addr; uint32_t word; } k_guard[] = {
 
 static uint32_t rd32(uint64_t a) { return *(volatile uint32_t *)(uintptr_t)a; }
 static uint64_t rd64(uint64_t a) { return *(volatile uint64_t *)(uintptr_t)a; }
+static uint8_t rd8(uint64_t a) { return *(volatile uint8_t *)(uintptr_t)a; }
+
+// The live pouch (runtime/quick_drop_action.c uses the same calls and item layout): every page and slot, kept as
+// actor names so a companion app can map them to display names with its own catalog.
+#define GEAR_MAX 128
+typedef struct { char actor[64]; int32_t type, value; uint8_t equipped; } GearEntry;
+static GearEntry g_gear[GEAR_MAX];
+static pthread_mutex_t g_gear_lock = PTHREAD_MUTEX_INITIALIZER;
+static int g_gear_count;
+static volatile uint64_t g_gear_seq;  // bumped by every completed scan
 
 // ---- catalog
 static CheatItem *g_items;
@@ -297,7 +307,7 @@ const CheatPlace *cheat_place_find(const char *q) {
 }
 
 // ---- state
-enum { R_GIVE, R_RUPEES_ADD, R_RUPEES_SET, R_WARP, R_FLAG, R_FLAG_GET, R_MEDALLION, R_SCENE, R_MEDPOS };
+enum { R_GIVE, R_RUPEES_ADD, R_RUPEES_SET, R_WARP, R_FLAG, R_FLAG_GET, R_MEDALLION, R_SCENE, R_MEDPOS, R_GEAR };
 typedef struct { int kind; char name[96]; char name2[64]; int a, b; float x, y, z; } Request;
 #define QMAX 32
 static pthread_mutex_t g_lock = PTHREAD_MUTEX_INITIALIZER;
@@ -506,6 +516,71 @@ static uint32_t pouch_count(void) {  // PauseMenuDataMgr's item list (+0x68: Off
     return mgr ? rd32(mgr + 0x78) : 0;
 }
 
+// ---- live equipment: the pause menu's pouch, every page and slot. Item layout from quick_drop_action.c:
+// +0x18 type (0 sword, 1 bow, 2 arrow, 3 shield, 4-6 armour head/upper/lower), +0x20 value (durability for equipment),
+// +0x24 equipped, +0x25 valid, +0x30 actor name pointer. The calls are the game's own, so they run on the game thread.
+static uint64_t gear_call(Cpu *c, uint64_t fn, uint64_t x0, uint64_t x1, uint64_t x2) {
+    Cpu call = *c;
+    call.x[0] = x0;
+    call.x[1] = x1;
+    call.x[2] = x2;
+    call.x[3] = 0;
+    guest_call(&call, fn);
+    return call.x[0];
+}
+
+static bool gear_name(uint64_t p, char *out, int n) {
+    if (p < GUEST_LO || p >= GUEST_HI) return false;
+    int i = 0;
+    for (; i < n - 1; i++) {
+        char ch = *(volatile char *)(uintptr_t)(p + (uint64_t)i);
+        if (!ch) break;
+        if (ch < 32 || ch > 126) return false;
+        out[i] = ch;
+    }
+    out[i] = 0;
+    return i > 0;
+}
+
+static void gear_scan(void) {
+    GearEntry items[GEAR_MAX];
+    int n = 0;
+    uint64_t p = rd64(GOT_POUCH_MGR), mgr = p ? rd64(p) : 0;
+    Cpu *c = kernel_current_cpu();
+    if (mgr && c && g_site.pouch_page_count && g_site.pouch_page_item &&
+        (c->sp & 15) == 0 && c->sp >= GUEST_LO + 0x100 && c->sp < GUEST_HI) {
+        Cpu call = *c;  // (a scratch workspace, like quick_drop's: the caller must see none of these reads)
+        call.sp -= 0x100;
+        int tabs = (int32_t)rd32(mgr + 0x44498);
+        if (tabs < 0 || tabs > 64) tabs = 0;
+        if (g_site.pouch_lock) gear_call(&call, g_site.pouch_lock, mgr + 0x28, 0, 0);
+        for (int tab = 0; tab < tabs && n < GEAR_MAX; tab++) {
+            int count = (int32_t)gear_call(&call, g_site.pouch_page_count, mgr, (uint64_t)tab, 0);
+            if (count <= 0 || count > 40) continue;
+            for (int slot = 0; slot < count && n < GEAR_MAX; slot++) {
+                uint64_t item = gear_call(&call, g_site.pouch_page_item, mgr, (uint64_t)tab, (uint64_t)slot);
+                if (item < GUEST_LO || item >= GUEST_HI || GUEST_HI - item < 0x38) continue;
+                if (!rd8(item + 0x25)) continue;  // (a stale or reserved slot)
+                int32_t type = (int32_t)rd32(item + 0x18), value = (int32_t)rd32(item + 0x20);
+                if (!((type >= 0 && type <= 1) || (type >= 3 && type <= 6))) continue;  // (sword, bow, shield, armor)
+                if (type <= 3 && value <= 0) continue;  // (armor's value is 0: no durability)
+                GearEntry *e = &items[n];
+                if (!gear_name(rd64(item + 0x30), e->actor, (int)sizeof e->actor)) continue;
+                e->type = type;
+                e->value = value;
+                e->equipped = rd8(item + 0x24) ? 1 : 0;
+                n++;
+            }
+        }
+        if (g_site.pouch_unlock) gear_call(&call, g_site.pouch_unlock, mgr + 0x28, 0, 0);
+    }
+    pthread_mutex_lock(&g_gear_lock);
+    memcpy(g_gear, items, (size_t)n * sizeof *items);
+    g_gear_count = n;
+    pthread_mutex_unlock(&g_gear_lock);
+    __atomic_store_n(&g_gear_seq, __atomic_load_n(&g_gear_seq, __ATOMIC_RELAXED) + 1, __ATOMIC_RELEASE);
+}
+
 // "s:Name" (s32, true when > 0) or "b:Name" (bool); -1 when unreadable or empty
 static int flag_eval(const char *spec) {
     if (!spec || strlen(spec) < 3) return -1;
@@ -627,6 +702,9 @@ static void run(const Request *r) {
     }
     case R_FLAG:
         set_status(gdt_set_s32(r->name, r->a) ? "Set %s = %d." : "Could not set %s = %d.", r->name, r->a);
+        break;
+    case R_GEAR:
+        gear_scan();
         break;
     case R_WARP: {
         char xs[32], ys[32], zs[32], msg[256];
@@ -901,6 +979,54 @@ static void cmd_queststate(int argc, char **argv, ControlReply *rep) {
     free(out);
 }
 
+// The live pouch: a companion app gets the actor names, type, durability/quantity and the equipped flags, so it can
+// show what Link is actually carrying and wearing without waiting for a save.
+static void cmd_gearstate(int argc, char **argv, ControlReply *rep) {
+    (void)argc; (void)argv;
+    if (!cheats_world_ready()) {
+        control_field_bool(rep, "ready", false);
+        control_field_str(rep, "state", "waiting for the game");
+        return;
+    }
+    uint64_t p = rd64(GOT_POUCH_MGR);
+    if (!p || !rd64(p)) {
+        control_field_bool(rep, "ready", false);
+        control_field_str(rep, "state", "no pouch yet");
+        return;
+    }
+    uint64_t seq = __atomic_load_n(&g_gear_seq, __ATOMIC_ACQUIRE);
+    Request r = {R_GEAR};
+    if (!push(&r)) { control_fail(rep, "Queue full"); return; }
+    for (int i = 0; i < 75 && __atomic_load_n(&g_gear_seq, __ATOMIC_ACQUIRE) == seq; i++)
+        SDL_Delay(4);  // (the game thread scans within a frame or two)
+    if (__atomic_load_n(&g_gear_seq, __ATOMIC_ACQUIRE) == seq) {
+        control_fail(rep, "No answer: is a game loaded and unpaused?");
+        return;
+    }
+    GearEntry items[GEAR_MAX];
+    pthread_mutex_lock(&g_gear_lock);
+    int n = g_gear_count;
+    memcpy(items, g_gear, (size_t)n * sizeof *items);
+    pthread_mutex_unlock(&g_gear_lock);
+    size_t cap = (size_t)n * 96 + 1;
+    char *out = calloc(1, cap);
+    if (!out) { control_fail(rep, "Out of memory"); return; }
+    size_t used = 0;
+    int equipped = 0;
+    for (int i = 0; i < n; i++) {
+        equipped += items[i].equipped != 0;
+        int wrote = snprintf(out + used, cap - used, "%s%s|%d|%d|%d", i ? ";" : "", items[i].actor,
+                             items[i].type, items[i].value, items[i].equipped);
+        if (wrote < 0 || (size_t)wrote >= cap - used) break;
+        used += (size_t)wrote;
+    }
+    control_field_bool(rep, "ready", true);
+    control_field_int(rep, "count", n);
+    control_field_int(rep, "equipped", equipped);
+    control_field_str(rep, "items", out);
+    free(out);
+}
+
 static void cmd_medallion(int argc, char **argv, ControlReply *rep) {
     if (argc < 2) { control_fail(rep, "Usage: medallion <place>  (moves the Travel Medallion there; then fast travel to it)"); return; }
     char q[160] = "";
@@ -981,6 +1107,7 @@ void cheats_init(void) {
         {"shrine", "[end | entrance | chest <n>]", "Shrine solver: warp to the end of the shrine you are in", cmd_shrine, CONTROL_PLAYER},
         {"flag", "<name> [value]", "Read a game data flag, or set an s32 one (local cheat)", cmd_flag, CONTROL_PLAYER},
         {"queststate", "", "Live quest step flags from the game (local cheat)", cmd_queststate, CONTROL_PLAYER},
+        {"gearstate", "", "Live pouch equipment and what is equipped (local cheat)", cmd_gearstate, CONTROL_PLAYER},
         {"cheatmenu", "", "Open the cheat panel (also F9)", cmd_cheatmenu, CONTROL_PLAYER},
         {"cheatstate", "", "Why queued cheats are waiting (local cheat)", cmd_cheatstate, CONTROL_PLAYER},
     };

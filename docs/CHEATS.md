@@ -15,7 +15,7 @@ back in the game (menus closed, no cutscene or loading screen).
 | World | Time of day and freezing it |
 
 Console (F12) equivalents: `warp <place>`, `travel <place | x y z>`,
-`shrine [end | entrance | chest n]`, `flag <name> [value]`, `queststate`, `assist <name> [on|off]`, `cheatmenu`,
+`shrine [end | entrance | chest n]`, `flag <name> [value]`, `queststate`, `gearstate`, `assist <name> [on|off]`, `cheatmenu`,
 `cheatstate`.
 Giving items and rupees from the console uses upstream's `give` and `rupees` (docs/CONTROL.md); the panel's own Items
 and rupee controls are unchanged.
@@ -25,6 +25,11 @@ heap: 24-byte records (`+8` the flags, with `0x01000000` set; `+12` the crc32 of
 blocks. One background scan finds the blocks when the command is first used (a few seconds); after that every answer
 reads the small window that holds them, so a companion app sees a step that flips without waiting for a save. The flag
 names come from `cheats/quests.tsv`, generated with the companion catalog.
+
+`gearstate` answers with the live pouch: every weapon, bow, shield and armour piece as `actor|type|value|equipped`,
+semicolon-separated. It walks the pause menu's own pages (`pouch_page_count` / `pouch_page_item`) under the inventory
+mutex, so it sees equipment the moment it changes, including what is held or worn. The save stores the pouch contents
+but not the equipped choice, so a companion app uses this live answer when it is available.
 
 ## Living with upstream (since the Alpha 5 sync)
 
@@ -56,6 +61,7 @@ Everything calls the game's own code (1.9.0; entry words are checked before the 
 | Give items | `PauseMenuDataMgr::itemGet` (0x7000d921bc) |
 | Rupees, flags | GameData increase-s32 (0x7000d34b30), TriggerParam getS32 / getBool |
 | Live quest flags | The game's bool flag records (24 bytes: flags at +8, name crc32 at +12) in 4096-record blocks on the heap; one scan, then a small window each poll |
+| Live equipment | `PauseMenuDataMgr` pouch pages (`pouch_page_count` / `pouch_page_item`) under its recursive mutex; item layout: +0x18 type, +0x20 durability/quantity, +0x24 equipped, +0x30 actor name |
 | Warp | `ksys::StageInfo::changeScene` (0x70012082e0, through `sChangeScene`) to the nearest ground start position, then a short hop |
 | Shrine solver | The current stage (`StageInfo` map type / name, 0x7001dae3a0 / 0x7001dae3d8) and the shrine's own map data |
 | Horse stamina | A verified patch site skips the spur's charge store (0x6b0d2c) |
