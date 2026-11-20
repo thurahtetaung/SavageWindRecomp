@@ -852,6 +852,11 @@ static void cmd_queststate(int argc, char **argv, ControlReply *rep) {
     int n = cheat_quest_count();
     if (!n) { control_fail(rep, "No cheats/quests.tsv (scripts/build-game-catalog.py writes it)"); return; }
     if (!kernel_heap_size()) { control_fail(rep, "The game isn't running yet"); return; }
+    if (!cheats_world_ready()) {  // (the heap scan waits for the save to load)
+        control_field_bool(rep, "ready", false);
+        control_field_str(rep, "state", "waiting for the game");
+        return;
+    }
     flag_slots_build();
     if (!__atomic_load_n(&g_flags_ready, __ATOMIC_ACQUIRE) &&
         !__atomic_load_n(&g_flags_busy, __ATOMIC_ACQUIRE)) {
