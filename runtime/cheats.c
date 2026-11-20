@@ -67,6 +67,16 @@ static CheatShrine *g_shrines;
 static int g_nshrines;
 static CheatMark *g_marks;
 static int g_nmarks;
+// Quest step flags (cheats/quests.tsv). Read a slice each tick, so a companion app sees quest state without a save.
+#define QUESTS_PER_TICK 24
+#define QUESTS_MAX 1024
+static char **g_quests;
+static int g_nquests;
+static unsigned char g_quest_reading[QUESTS_MAX];   // the sweep in progress
+static unsigned char g_quest_read_done[QUESTS_MAX]; // the last complete sweep
+static volatile int g_quest_read;
+static volatile int g_quest_ready;
+static volatile uint64_t g_quests_wanted;
 static pthread_once_t g_catalog_once = PTHREAD_ONCE_INIT;
 
 static char *dup_field(char **p) {
@@ -140,7 +150,23 @@ static void load_catalog(void) {
         if (*s->id) g_nshrines++;
     }
     if (f) fclose(f);
-    LOG("[cheats] catalog: %d items, %d places, %d map markers, %d shrines\n", g_nitems, g_nplaces, g_nmarks, g_nshrines);
+    f = fopen("cheats/quests.tsv", "rb");
+    cap = 0;
+    while (f && fgets(line, sizeof line, f)) {
+        char *p = line;
+        char *id = dup_field(&p), *type = dup_field(&p), *step = dup_field(&p);
+        char *flag = dup_field(&p);
+        if (*flag && g_nquests < QUESTS_MAX) {
+            if (g_nquests == cap) { cap = cap ? cap * 2 : 256; g_quests = realloc(g_quests, (size_t)cap * sizeof *g_quests); }
+            g_quests[g_nquests++] = flag;
+        } else {
+            free(flag);
+        }
+        free(id); free(type); free(step);
+    }
+    if (f) fclose(f);
+    LOG("[cheats] catalog: %d items, %d places, %d map markers, %d shrines, %d quest flags\n", g_nitems, g_nplaces,
+        g_nmarks, g_nshrines, g_nquests);
 }
 int cheat_item_count(void) { pthread_once(&g_catalog_once, load_catalog); return g_nitems; }
 const CheatItem *cheat_item(int i) { return i >= 0 && i < cheat_item_count() ? &g_items[i] : NULL; }
@@ -161,6 +187,18 @@ const CheatMark *cheat_mark(int i) { return i >= 0 && i < cheat_mark_count() ? &
 static volatile uint64_t g_marks_wanted;  // the tick count until which the map wants fresh flags
 static volatile uint64_t g_ticks;         // game ticks seen (cheatstate)
 void cheat_marks_want(void) { g_marks_wanted = g_ticks + 120; }
+
+int cheat_quest_count(void) { pthread_once(&g_catalog_once, load_catalog); return g_nquests; }
+// Ask for a fresh sweep of the quest flags. A poll that arrives mid-sweep keeps the one in flight; an expired sweep
+// starts over (a paused or loading game can let a sweep run past its deadline).
+static void cheat_quests_want(void) {
+    int n = cheat_quest_count();
+    if (!n) return;
+    if (g_quests_wanted && g_ticks <= g_quests_wanted) return;
+    g_quest_read = 0;
+    g_quest_ready = 0;
+    g_quests_wanted = g_ticks + (uint64_t)((n + QUESTS_PER_TICK - 1) / QUESTS_PER_TICK) + 4;
+}
 bool cheat_link_position(float p[3]) {
     if (!g_site.player_info) return false;
     uint64_t pi = *(volatile uint64_t *)(uintptr_t)g_site.player_info;
@@ -654,6 +692,17 @@ void cheats_game_tick(void) {
             m->done = flag_eval(m->done_flag);
         }
     }
+    if (g_quests_wanted && g_ticks <= g_quests_wanted && g_quest_read < g_nquests) {  // a companion asked: 24 a tick
+        for (int k = 0; k < QUESTS_PER_TICK && g_quest_read < g_nquests; k++, g_quest_read++) {
+            bool b = false;
+            g_quest_reading[g_quest_read] = gdt_get_bool(g_quests[g_quest_read], &b) ? (b ? 1 : 0) : 2;
+        }
+        if (g_quest_read >= g_nquests) {
+            memcpy(g_quest_read_done, g_quest_reading, (size_t)g_nquests);
+            g_quest_ready = 1;
+            g_quests_wanted = 0;
+        }
+    }
     Request r;  // one request per tick, so a batch of gifts never stalls a frame
     if (take(false, &r)) run(&r);
 }
@@ -730,6 +779,34 @@ static void cmd_flag(int argc, char **argv, ControlReply *rep) {
     for (int i = 0; i < 50 && !g_query_done; i++) SDL_Delay(4);  // (the game thread answers within a frame or two)
     if (g_query_done) { control_field_str(rep, "flag", g_query); control_text(rep, "%s", g_query); }
     else control_fail(rep, "No answer: is a game loaded and unpaused?");
+}
+
+// The quest step flags that are set, from the last complete sweep; asks for a fresh one. Names come from
+// cheats/quests.tsv, so a companion app matches them against its own quest catalog and nothing needs a save.
+static void cmd_queststate(int argc, char **argv, ControlReply *rep) {
+    (void)argc; (void)argv;
+    int n = cheat_quest_count();
+    if (!n) { control_fail(rep, "No cheats/quests.tsv (scripts/build-game-catalog.py writes it)"); return; }
+    cheat_quests_want();
+    size_t cap = (size_t)n * 40 + 1;
+    char *set = calloc(1, cap);
+    if (!set) { control_fail(rep, "Out of memory"); return; }
+    size_t used = 0;
+    for (int i = 0; i < n; i++)
+        if (g_quest_read_done[i] == 1) {
+            const char *flag = g_quests[i];
+            size_t len = strlen(flag);
+            if (used + len + 2 > cap) break;
+            if (used) set[used++] = ',';
+            memcpy(set + used, flag, len);
+            used += len;
+            set[used] = 0;
+        }
+    control_field_int(rep, "count", n);
+    control_field_bool(rep, "ready", g_quest_ready != 0);
+    control_field_int(rep, "read", g_quest_read);
+    control_field_str(rep, "set", set);
+    free(set);
 }
 
 static void cmd_medallion(int argc, char **argv, ControlReply *rep) {
@@ -811,6 +888,7 @@ void cheats_init(void) {
         {"medallion", "<place>", "Move the Travel Medallion to a place, for a proper fast travel there (local cheat)", cmd_medallion, CONTROL_PLAYER},
         {"shrine", "[end | entrance | chest <n>]", "Shrine solver: warp to the end of the shrine you are in", cmd_shrine, CONTROL_PLAYER},
         {"flag", "<name> [value]", "Read a game data flag, or set an s32 one (local cheat)", cmd_flag, CONTROL_PLAYER},
+        {"queststate", "", "Live quest step flags from the game (local cheat)", cmd_queststate, CONTROL_PLAYER},
         {"cheatmenu", "", "Open the cheat panel (also F9)", cmd_cheatmenu, CONTROL_PLAYER},
         {"cheatstate", "", "Why queued cheats are waiting (local cheat)", cmd_cheatstate, CONTROL_PLAYER},
     };

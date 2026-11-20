@@ -15,9 +15,14 @@ back in the game (menus closed, no cutscene or loading screen).
 | World | Time of day and freezing it |
 
 Console (F12) equivalents: `warp <place>`, `travel <place | x y z>`,
-`shrine [end | entrance | chest n]`, `flag <name> [value]`, `assist <name> [on|off]`, `cheatmenu`, `cheatstate`.
+`shrine [end | entrance | chest n]`, `flag <name> [value]`, `queststate`, `assist <name> [on|off]`, `cheatmenu`,
+`cheatstate`.
 Giving items and rupees from the console uses upstream's `give` and `rupees` (docs/CONTROL.md); the panel's own Items
 and rupee controls are unchanged.
+
+`queststate` answers with the quest step flags that are set, read from `cheats/quests.tsv` (generated with the
+companion catalog) 24 flags a game tick. A companion app can therefore show quest and story progress without waiting
+for a save; the flags are read on the game thread with `TriggerParam getBool`, the same call the panel's flags use.
 
 ## Living with upstream (since the Alpha 5 sync)
 
@@ -48,6 +53,7 @@ Everything calls the game's own code (1.9.0; entry words are checked before the 
 | --- | --- |
 | Give items | `PauseMenuDataMgr::itemGet` (0x7000d921bc) |
 | Rupees, flags | GameData increase-s32 (0x7000d34b30), TriggerParam getS32 / getBool |
+| Live quest flags | TriggerParam getBool for each flag in `cheats/quests.tsv`, 24 a game tick |
 | Warp | `ksys::StageInfo::changeScene` (0x70012082e0, through `sChangeScene`) to the nearest ground start position, then a short hop |
 | Shrine solver | The current stage (`StageInfo` map type / name, 0x7001dae3a0 / 0x7001dae3d8) and the shrine's own map data |
 | Horse stamina | A verified patch site skips the spur's charge store (0x6b0d2c) |
