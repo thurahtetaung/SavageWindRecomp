@@ -34,6 +34,7 @@
 
 // Optional helpers are zero when their complete feature group was not found.
 #define GAME_SITES_OPTIONAL(X) \
+    X(ui_control_layer)       /* a UI screen's input layer (runtime/menu_wrap.c) */ \
     X(scope_pin_manager) \
     X(scope_pin_place) \
     X(scope_pin_remove) \
