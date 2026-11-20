@@ -14,10 +14,14 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <zlib.h>
 #include <SDL3/SDL_timer.h>
 
 #include "control.h"
 #include "game_sites.h"
+#include "hle.h"
+#include "kernel.h"
+#include "platform.h"
 #include "rt.h"
 #include "local_assists.h"
 #include "framepace.h"
@@ -67,16 +71,21 @@ static CheatShrine *g_shrines;
 static int g_nshrines;
 static CheatMark *g_marks;
 static int g_nmarks;
-// Quest step flags (cheats/quests.tsv). Read a slice each tick, so a companion app sees quest state without a save.
-#define QUESTS_PER_TICK 24
+// Quest step flags, read from the game's live bool flag records. A record is 24 bytes on the game heap:
+//   +0 the class (in main), +4 0x70, +8 flags (0x01000000 = set), +12 the crc32 of the flag's name, +16..+20 0
+// The game keeps them in 4096-record blocks; one slow scan finds the blocks, then a small window covers every poll.
 #define QUESTS_MAX 1024
+#define FLAG_RECORD 0x01d21a20u
+#define FLAG_SET 0x01000000u
+#define FLAG_SLOTS 2048
 static char **g_quests;
+static uint32_t g_quest_hash[QUESTS_MAX];
 static int g_nquests;
-static unsigned char g_quest_reading[QUESTS_MAX];   // the sweep in progress
-static unsigned char g_quest_read_done[QUESTS_MAX]; // the last complete sweep
-static volatile int g_quest_read;
-static volatile int g_quest_ready;
-static volatile uint64_t g_quests_wanted;
+static uint32_t g_slot_hash[FLAG_SLOTS];
+static int16_t g_slot_index[FLAG_SLOTS];
+static volatile int g_flags_busy, g_flags_ready, g_flags_stop;
+static uint64_t g_flags_lo, g_flags_hi;
+static pthread_t g_flags_thread;
 static pthread_once_t g_catalog_once = PTHREAD_ONCE_INIT;
 
 static char *dup_field(char **p) {
@@ -158,6 +167,7 @@ static void load_catalog(void) {
         char *flag = dup_field(&p);
         if (*flag && g_nquests < QUESTS_MAX) {
             if (g_nquests == cap) { cap = cap ? cap * 2 : 256; g_quests = realloc(g_quests, (size_t)cap * sizeof *g_quests); }
+            g_quest_hash[g_nquests] = (uint32_t)crc32(0, (const Bytef *)flag, (uInt)strlen(flag));
             g_quests[g_nquests++] = flag;
         } else {
             free(flag);
@@ -189,15 +199,79 @@ static volatile uint64_t g_ticks;         // game ticks seen (cheatstate)
 void cheat_marks_want(void) { g_marks_wanted = g_ticks + 120; }
 
 int cheat_quest_count(void) { pthread_once(&g_catalog_once, load_catalog); return g_nquests; }
-// Ask for a fresh sweep of the quest flags. A poll that arrives mid-sweep keeps the one in flight; an expired sweep
-// starts over (a paused or loading game can let a sweep run past its deadline).
-static void cheat_quests_want(void) {
-    int n = cheat_quest_count();
-    if (!n) return;
-    if (g_quests_wanted && g_ticks <= g_quests_wanted) return;
-    g_quest_read = 0;
-    g_quest_ready = 0;
-    g_quests_wanted = g_ticks + (uint64_t)((n + QUESTS_PER_TICK - 1) / QUESTS_PER_TICK) + 4;
+
+// A small open-addressed index of the quest flag hashes: every record in the scan is tested against it.
+static void flag_slots_build(void) {
+    for (int i = 0; i < g_nquests; i++) {
+        uint32_t h = g_quest_hash[i];
+        uint32_t s = (h * 2654435761u) & (FLAG_SLOTS - 1);
+        while (g_slot_hash[s] && g_slot_hash[s] != h) s = (s + 1) & (FLAG_SLOTS - 1);
+        g_slot_hash[s] = h;
+        g_slot_index[s] = (int16_t)i;
+    }
+}
+static int flag_slot(uint32_t h) {
+    uint32_t s = (h * 2654435761u) & (FLAG_SLOTS - 1);
+    for (uint32_t n = 0; n < FLAG_SLOTS; n++, s = (s + 1) & (FLAG_SLOTS - 1)) {
+        if (!g_slot_hash[s]) return -1;
+        if (g_slot_hash[s] == h) return g_slot_index[s];
+    }
+    return -1;
+}
+
+// The 24-byte records, over [lo, hi): the span that holds them (for the small window each poll).
+static void flag_scan(uint64_t lo, uint64_t hi, uint64_t *span_lo, uint64_t *span_hi) {
+    uint64_t a, e;
+    for (uint64_t at = lo; !g_flags_stop && at < hi && plat_committed_range(at, hi, &a, &e) && e > at; at = e) {
+        for (uint64_t p = (a + 7) & ~7ull; p + 24 <= e; p += 8) {
+            if (rd32(p) != FLAG_RECORD || rd32(p + 4) != 0x70) continue;
+            if (!*span_lo || p < *span_lo) *span_lo = p;
+            if (p + 24 > *span_hi) *span_hi = p + 24;
+        }
+    }
+}
+
+// One slow scan of the heap finds the blocks (they are allocated together); the window then covers every poll.
+static void *flag_scan_thread(void *arg) {
+    (void)arg;
+    uint64_t hi = HEAP_BASE + kernel_heap_size(), lo = 0, end = 0;
+    if (hi > HEAP_BASE) flag_scan(HEAP_BASE, hi, &lo, &end);
+    if (lo && !g_flags_stop) {
+        uint64_t pad = 4 * 1024 * 1024;
+        g_flags_lo = lo > pad ? lo - pad : HEAP_BASE;
+        g_flags_hi = end + pad;
+        __atomic_store_n(&g_flags_ready, 1, __ATOMIC_RELEASE);
+        LOG("[cheats] quest flags: records from %llx to %llx\n", (unsigned long long)lo, (unsigned long long)end);
+    }
+    __atomic_store_n(&g_flags_busy, 0, __ATOMIC_RELEASE);
+    return NULL;
+}
+
+// Read the records in the window: found = the flag exists, set = the record's 0x01000000 bit.
+static int flag_window_scan(unsigned char *found, unsigned char *set) {
+    int hits = 0;
+    uint64_t lo = g_flags_lo, hi = g_flags_hi, a, e;
+    for (uint64_t at = lo; at < hi && plat_committed_range(at, hi, &a, &e) && e > at; at = e) {
+        for (uint64_t p = (a + 7) & ~7ull; p + 24 <= e; p += 8) {
+            if (rd32(p) != FLAG_RECORD || rd32(p + 4) != 0x70) continue;
+            int i = flag_slot(rd32(p + 12));
+            if (i < 0) continue;
+            if (!found[i]) { found[i] = 1; hits++; }
+            if (rd32(p + 8) & FLAG_SET) set[i] = 1;
+        }
+    }
+    return hits;
+}
+
+RT_ON_RESET(cheats_flags_reset) {
+    if (__atomic_load_n(&g_flags_busy, __ATOMIC_ACQUIRE)) {
+        __atomic_store_n(&g_flags_stop, 1, __ATOMIC_RELEASE);
+        pthread_join(g_flags_thread, NULL);
+        __atomic_store_n(&g_flags_busy, 0, __ATOMIC_RELEASE);
+    }
+    __atomic_store_n(&g_flags_stop, 0, __ATOMIC_RELEASE);
+    __atomic_store_n(&g_flags_ready, 0, __ATOMIC_RELEASE);
+    g_flags_lo = g_flags_hi = 0;
 }
 bool cheat_link_position(float p[3]) {
     if (!g_site.player_info) return false;
@@ -692,17 +766,6 @@ void cheats_game_tick(void) {
             m->done = flag_eval(m->done_flag);
         }
     }
-    if (g_quests_wanted && g_ticks <= g_quests_wanted && g_quest_read < g_nquests) {  // a companion asked: 24 a tick
-        for (int k = 0; k < QUESTS_PER_TICK && g_quest_read < g_nquests; k++, g_quest_read++) {
-            bool b = false;
-            g_quest_reading[g_quest_read] = gdt_get_bool(g_quests[g_quest_read], &b) ? (b ? 1 : 0) : 2;
-        }
-        if (g_quest_read >= g_nquests) {
-            memcpy(g_quest_read_done, g_quest_reading, (size_t)g_nquests);
-            g_quest_ready = 1;
-            g_quests_wanted = 0;
-        }
-    }
     Request r;  // one request per tick, so a batch of gifts never stalls a frame
     if (take(false, &r)) run(&r);
 }
@@ -781,32 +844,56 @@ static void cmd_flag(int argc, char **argv, ControlReply *rep) {
     else control_fail(rep, "No answer: is a game loaded and unpaused?");
 }
 
-// The quest step flags that are set, from the last complete sweep; asks for a fresh one. Names come from
-// cheats/quests.tsv, so a companion app matches them against its own quest catalog and nothing needs a save.
+// The quest step flags that are set, read from the game's live bool flag records (see the block at the top).
+// The first call starts a background scan of the heap; later calls read the small window it found, so a companion
+// app sees a step that flipped without waiting for a save. Names come from cheats/quests.tsv.
 static void cmd_queststate(int argc, char **argv, ControlReply *rep) {
     (void)argc; (void)argv;
     int n = cheat_quest_count();
     if (!n) { control_fail(rep, "No cheats/quests.tsv (scripts/build-game-catalog.py writes it)"); return; }
-    cheat_quests_want();
+    if (!kernel_heap_size()) { control_fail(rep, "The game isn't running yet"); return; }
+    flag_slots_build();
+    if (!__atomic_load_n(&g_flags_ready, __ATOMIC_ACQUIRE) &&
+        !__atomic_load_n(&g_flags_busy, __ATOMIC_ACQUIRE)) {
+        __atomic_store_n(&g_flags_busy, 1, __ATOMIC_RELEASE);
+        if (pthread_create(&g_flags_thread, NULL, flag_scan_thread, NULL) != 0) {
+            __atomic_store_n(&g_flags_busy, 0, __ATOMIC_RELEASE);
+            control_fail(rep, "Cannot start the flag scan");
+            return;
+        }
+    }
+    control_field_int(rep, "count", n);
+    if (!__atomic_load_n(&g_flags_ready, __ATOMIC_ACQUIRE)) {
+        control_field_bool(rep, "ready", false);
+        control_field_str(rep, "state", "scanning");
+        return;
+    }
+    unsigned char found[QUESTS_MAX] = {0}, set[QUESTS_MAX] = {0};
+    int hits = flag_window_scan(found, set);
+    if (!hits) {  // the blocks moved (a new game): scan again on the next poll
+        __atomic_store_n(&g_flags_ready, 0, __ATOMIC_RELEASE);
+        control_field_bool(rep, "ready", false);
+        control_field_str(rep, "state", "rescanning");
+        return;
+    }
     size_t cap = (size_t)n * 40 + 1;
-    char *set = calloc(1, cap);
-    if (!set) { control_fail(rep, "Out of memory"); return; }
+    char *out = calloc(1, cap);
+    if (!out) { control_fail(rep, "Out of memory"); return; }
     size_t used = 0;
     for (int i = 0; i < n; i++)
-        if (g_quest_read_done[i] == 1) {
+        if (set[i]) {
             const char *flag = g_quests[i];
             size_t len = strlen(flag);
             if (used + len + 2 > cap) break;
-            if (used) set[used++] = ',';
-            memcpy(set + used, flag, len);
+            if (used) out[used++] = ',';
+            memcpy(out + used, flag, len);
             used += len;
-            set[used] = 0;
+            out[used] = 0;
         }
-    control_field_int(rep, "count", n);
-    control_field_bool(rep, "ready", g_quest_ready != 0);
-    control_field_int(rep, "read", g_quest_read);
-    control_field_str(rep, "set", set);
-    free(set);
+    control_field_bool(rep, "ready", true);
+    control_field_int(rep, "found", hits);
+    control_field_str(rep, "set", out);
+    free(out);
 }
 
 static void cmd_medallion(int argc, char **argv, ControlReply *rep) {

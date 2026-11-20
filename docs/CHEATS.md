@@ -20,9 +20,11 @@ Console (F12) equivalents: `warp <place>`, `travel <place | x y z>`,
 Giving items and rupees from the console uses upstream's `give` and `rupees` (docs/CONTROL.md); the panel's own Items
 and rupee controls are unchanged.
 
-`queststate` answers with the quest step flags that are set, read from `cheats/quests.tsv` (generated with the
-companion catalog) 24 flags a game tick. A companion app can therefore show quest and story progress without waiting
-for a save; the flags are read on the game thread with `TriggerParam getBool`, the same call the panel's flags use.
+`queststate` answers with the quest step flags that are set, read from the game's live bool flag records on its
+heap: 24-byte records (`+8` the flags, with `0x01000000` set; `+12` the crc32 of the flag's name), kept in 4096-record
+blocks. One background scan finds the blocks when the command is first used (a few seconds); after that every answer
+reads the small window that holds them, so a companion app sees a step that flips without waiting for a save. The flag
+names come from `cheats/quests.tsv`, generated with the companion catalog.
 
 ## Living with upstream (since the Alpha 5 sync)
 
@@ -53,7 +55,7 @@ Everything calls the game's own code (1.9.0; entry words are checked before the 
 | --- | --- |
 | Give items | `PauseMenuDataMgr::itemGet` (0x7000d921bc) |
 | Rupees, flags | GameData increase-s32 (0x7000d34b30), TriggerParam getS32 / getBool |
-| Live quest flags | TriggerParam getBool for each flag in `cheats/quests.tsv`, 24 a game tick |
+| Live quest flags | The game's bool flag records (24 bytes: flags at +8, name crc32 at +12) in 4096-record blocks on the heap; one scan, then a small window each poll |
 | Warp | `ksys::StageInfo::changeScene` (0x70012082e0, through `sChangeScene`) to the nearest ground start position, then a short hop |
 | Shrine solver | The current stage (`StageInfo` map type / name, 0x7001dae3a0 / 0x7001dae3d8) and the shrine's own map data |
 | Horse stamina | A verified patch site skips the spur's charge store (0x6b0d2c) |
