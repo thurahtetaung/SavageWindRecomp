@@ -14,5 +14,6 @@ void discord_rpc_set(const char *details, const char *state);
 
 // (the messages, on their own for tests/test_discord_rpc.c)
 bool discord_app_id_valid(const char *id);
-int discord_activity_json(char *out, size_t size, long pid, uint64_t start, const char *details, const char *state, unsigned nonce);
+int discord_activity_json(char *out, size_t size, long pid, uint64_t start, const char *name,
+                          const char *details, const char *state, unsigned nonce);
 int discord_frame(uint8_t *out, size_t size, uint32_t op, const char *json);

@@ -8,8 +8,9 @@ int main(void) {
     char j[1024];
 
     // Escaped text
-    assert(discord_activity_json(j, sizeof j, 42, 1000, "Isla \"Eventide\"\\", "", 7) > 0);
+    assert(discord_activity_json(j, sizeof j, 42, 1000, "", "Isla \"Eventide\"\\", "", 7) > 0);
     assert(strstr(j, "\"details\":\"Isla \\\"Eventide\\\"\\\\\""));
+    assert(!strstr(j, "\"name\""));
     assert(!strstr(j, "\"state\""));  // (Discord refuses an empty state)
     assert(strstr(j, "\"pid\":42"));
     assert(strstr(j, "\"start\":1000"));
@@ -17,11 +18,13 @@ int main(void) {
     assert(strstr(j, "\"cmd\":\"SET_ACTIVITY\""));
 
     // UTF-8 goes through as it is
-    assert(discord_activity_json(j, sizeof j, 1, 1, "Aldea Kakariko", "Cañón", 1) > 0);
+    assert(discord_activity_json(j, sizeof j, 1, 1, "The Legend of Zelda: Breath of the Wild", "Aldea Kakariko", "Cañón", 1) > 0);
     assert(strstr(j, "\"state\":\"Cañón\""));
 
+    assert(strstr(j, "\"name\":\"The Legend of Zelda: Breath of the Wild\""));
+
     // Too small a buffer fails rather than cuts
-    assert(discord_activity_json(j, 16, 1, 1, "Aldea Kakariko", "Necluda", 1) < 0);
+    assert(discord_activity_json(j, 16, 1, 1, "", "Aldea Kakariko", "Necluda", 1) < 0);
 
     // The frame: op and length, little endian, then the text
     uint8_t f[64];

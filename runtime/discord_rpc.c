@@ -24,16 +24,20 @@ static char *json_text(char *out, const char *end, const char *s) {
     return out;
 }
 
-int discord_activity_json(char *out, size_t size, long pid, uint64_t start, const char *details, const char *state, unsigned nonce) {
-    char d[260], s[260], *e = d + sizeof d;
-    if (!json_text(d, e, details) || !json_text(s, s + sizeof s, state)) return -1;
-    int n;
-    if (*s)
-        n = snprintf(out, size, "{\"cmd\":\"SET_ACTIVITY\",\"args\":{\"pid\":%ld,\"activity\":{\"details\":\"%s\",\"state\":\"%s\","
-                     "\"timestamps\":{\"start\":%llu}}},\"nonce\":\"%u\"}", pid, d, s, (unsigned long long)start, nonce);
-    else
-        n = snprintf(out, size, "{\"cmd\":\"SET_ACTIVITY\",\"args\":{\"pid\":%ld,\"activity\":{\"details\":\"%s\","
-                     "\"timestamps\":{\"start\":%llu}}},\"nonce\":\"%u\"}", pid, d, (unsigned long long)start, nonce);
+int discord_activity_json(char *out, size_t size, long pid, uint64_t start, const char *name,
+                          const char *details, const char *state, unsigned nonce) {
+    char title[260], d[260], s[260];
+    if (!json_text(title, title + sizeof title, name) || !json_text(d, d + sizeof d, details) ||
+        !json_text(s, s + sizeof s, state)) return -1;
+
+    char name_field[sizeof title + 10] = "";
+    char state_field[sizeof s + 11] = "";
+    if (*title) snprintf(name_field, sizeof name_field, "\"name\":\"%s\",", title);
+    if (*s) snprintf(state_field, sizeof state_field, "\"state\":\"%s\",", s);
+
+    int n = snprintf(out, size, "{\"cmd\":\"SET_ACTIVITY\",\"args\":{\"pid\":%ld,\"activity\":{%s"
+                     "\"details\":\"%s\",%s\"timestamps\":{\"start\":%llu}}},\"nonce\":\"%u\"}",
+                     pid, name_field, d, state_field, (unsigned long long)start, nonce);
     return n < 0 || (size_t)n >= size ? -1 : n;
 }
 
@@ -137,7 +141,10 @@ static bool send_activity(HANDLE h, uint64_t start, const char *details, const c
     static unsigned nonce;
     char json[1024], reply[512] = "";
     uint32_t op = 0;
-    if (discord_activity_json(json, sizeof json, (long)GetCurrentProcessId(), start, details, state, ++nonce) < 0) return true;
+    // A user-supplied application keeps its own title.
+    const char *name = !strcmp(app_id, SAVAGEWIND_DISCORD_DEFAULT_APP_ID) ? "The Legend of Zelda: Breath of the Wild" : "";
+    if (discord_activity_json(json, sizeof json, (long)GetCurrentProcessId(), start, name, details, state, ++nonce) < 0)
+        return true;
     if (!pipe_send(h, 1, json) || !pipe_receive(h, &op, reply, sizeof reply)) return false;
     if (op == 2) return false;
     if (strstr(reply, "\"ERROR\"")) LOG("[discord] %s\n", reply);
