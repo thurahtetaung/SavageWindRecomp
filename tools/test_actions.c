@@ -11,6 +11,8 @@
 #include "input_bind.h"
 
 GameSites g_site;  // (no game: the HUD prompt check finds no screens)
+static bool dialogue;
+bool framepace_dialogue_ui(void) { return dialogue; }
 
 static uint64_t now;
 Uint64 SDL_GetTicks(void) { return now; }
@@ -556,6 +558,46 @@ static void swapped_jump_sprint_masks_keep_keyboard_bindings(void) {
     assert(hold(2) == -1 && hold(12) == -1);
 }
 
+static void dialogue_owns_a_shared_jump_press(void) {
+    reset_bindings();
+    act_set(BIND_DEV_PAD, 0, SDL_GAMEPAD_BUTTON_SOUTH);
+    act_set(BIND_DEV_PAD, JUMP, SDL_GAMEPAD_BUTTON_SOUTH);
+    uint64_t empty_screen_manager = 0;
+    g_site.screen_mgr = (uint64_t)(uintptr_t)&empty_screen_manager;
+    now = 10000;
+    host(0, 0, 0);
+    act_poll(true);
+    uint32_t cross = 1u << SDL_GAMEPAD_BUTTON_SOUTH;
+    host(0, 0, cross);
+    act_poll(true);
+    assert(hold(JUMP) == 1 && trig(JUMP) == 1);
+    assert(act_gameplay_buttons(0, held, cross) & (1ull << BIND_X));
+    host(0, 0, 0);
+    act_poll(true);
+    dialogue = true;
+    host(0, 0, cross);
+    act_poll(true);
+    assert(hold(0) == 1 && trig(0) == 1);  // dialogue can still advance
+    assert(hold(JUMP) == 0 && trig(JUMP) == 0);
+    uint64_t buttons = act_gameplay_buttons(0, held, cross);
+    assert((buttons & (1ull << BIND_A)) && !(buttons & (1ull << BIND_X)));
+    dialogue = false;
+    now += 1000;  // closing grace expired, but the final dialogue press is held
+    act_poll(true);
+    assert(hold(JUMP) == 0 && trig(JUMP) == 0);
+    assert(!(act_gameplay_buttons(0, held, cross) & (1ull << BIND_X)));
+    host(0, 0, 0);
+    act_poll(true);
+    assert(trig(JUMP) == 0);  // no buffered jump on release
+    host(0, 0, cross);
+    act_poll(true);
+    assert(hold(JUMP) == 1 && trig(JUMP) == 1);  // a fresh press jumps again
+    host(0, 0, 0);
+    act_poll(true);
+    g_site.screen_mgr = 0;
+    reset_bindings();
+}
+
 int main(void) {
     static const uint32_t k_masks_190[ACT_COUNT] = {
         0x1, 0x2, 0x8, 0x10, 0x8, 0x1, 0x8, 0x2, 0x8, 0x2, 0x8, 0x8, 0x2, 0x4, 0x2, 0x40, 0x1, 0x80, 0x20, 0x8, 0x2,
@@ -579,6 +621,7 @@ int main(void) {
     captures_allow_shared_action_inputs();
     host_pad_slots();
     names_and_groups();
+    dialogue_owns_a_shared_jump_press();
     puts("action bindings: default fallthrough, custom host bindings, schema migration, held / pressed, menus, shared keys, pad capture, contexts, reset and ini passed");
     return 0;
 }

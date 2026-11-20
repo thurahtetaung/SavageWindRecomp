@@ -7,6 +7,7 @@
 
 #define main unused_fs_main
 #include "../runtime/settings.c"
+#include "../runtime/local_assists.c"
 #include "../runtime/hle/bindings.c"
 #include "../runtime/nvn/glyphs.c"
 #include "../runtime/hle.h"
@@ -25,6 +26,10 @@ const TextLanguage g_text_languages[] = {{"Auto", NULL, NULL}};
 const VoiceLanguage g_voice_languages[] = {{"Auto", NULL}};
 const int g_ntext_languages = 1, g_nvoice_languages = 1;
 GameSites g_site;
+static bool test_title, test_menu;
+bool framepace_title_ui(void) { return test_title; }
+bool framepace_menu_ui(void) { return test_menu; }
+bool framepace_dialogue_ui(void) { return false; }
 uint64_t g_program_id;
 const char *g_romfs_dir;
 bool rt_resource(const char *name, const char *dev_rel, char *out, size_t n) {
@@ -161,11 +166,57 @@ int main(void) {
     glyphs_hud_positions(pos);
     assert(pos[0] == 0 && pos[1] == 1 && pos[2] == 2 && pos[3] == 3);
 
-    // Automatic follows g_bind_pad swaps (e.g. PS5 Cross / Circle swapped)
+    // Menu swaps do not change the HUD's independent gameplay actions.
     g_bind_pad[BIND_A] = SDL_GAMEPAD_BUTTON_SOUTH;
     g_bind_pad[BIND_B] = SDL_GAMEPAD_BUTTON_EAST;
     glyphs_hud_positions(pos);
-    assert(pos[0] == 1 && pos[1] == 0 && pos[2] == 2 && pos[3] == 3);
+    assert(pos[0] == 0 && pos[1] == 1 && pos[2] == 2 && pos[3] == 3);
+
+    // Circle Interact and Cross menu-confirm must produce different A glyphs.
+    g_site.screen_mgr = 1;  // the context functions above are synthetic, not guest memory
+    g_settings.button_icons = ICONS_PLAYSTATION;
+    test_title = test_menu = false;
+    assert(prompt_binding(BIND_DEV_PAD, BIND_A) == SDL_GAMEPAD_BUTTON_EAST);
+    assert(prompt_binding(BIND_DEV_PAD, BIND_B) == SDL_GAMEPAD_BUTTON_SOUTH);
+    Canvas actual = {0}, expected = {0};
+    Box icon_box = {25, 25, 40, 40};
+    int copy;
+    assert(draw_glyph(&actual, icon_box, 0xE040, ICONS_PLAYSTATION, &copy));
+    pad_button(&expected, icon_box, SDL_GAMEPAD_BUTTON_EAST, 2);
+    assert(!memcmp(&actual, &expected, sizeof actual));
+    uint32_t world_gen = glyphs_generation(), overlay_gen = glyphs_font_generation();
+    test_menu = true;
+    assert(prompt_binding(BIND_DEV_PAD, BIND_A) == SDL_GAMEPAD_BUTTON_SOUTH);
+    memset(&actual, 0, sizeof actual);
+    memset(&expected, 0, sizeof expected);
+    assert(draw_glyph(&actual, icon_box, 0xE040, ICONS_PLAYSTATION, &copy));
+    pad_button(&expected, icon_box, SDL_GAMEPAD_BUTTON_SOUTH, 2);
+    assert(!memcmp(&actual, &expected, sizeof actual));
+    assert(glyphs_generation() != world_gen);
+    assert(glyphs_font_generation() == overlay_gen);
+    test_menu = false;
+    assert(glyphs_generation() == world_gen);  // reuse the matching cached sheet
+    test_title = true;
+    assert(prompt_binding(BIND_DEV_PAD, BIND_A) == SDL_GAMEPAD_BUTTON_SOUTH);
+    test_title = false;
+    act_set(BIND_DEV_PAD, 2, SDL_GAMEPAD_BUTTON_SOUTH);
+    act_set(BIND_DEV_PAD, 15, SDL_GAMEPAD_BUTTON_NORTH);
+    assert(prompt_binding(BIND_DEV_PAD, BIND_X) == SDL_GAMEPAD_BUTTON_SOUTH);
+    assert(prompt_binding(BIND_DEV_PAD, BIND_RSTICK) == SDL_GAMEPAD_BUTTON_NORTH);
+    assert(glyphs_generation() != world_gen);
+    test_menu = true;
+    assert(prompt_binding(BIND_DEV_PAD, BIND_X) == g_bind_pad[BIND_X]);
+    assert(prompt_binding(BIND_DEV_PAD, BIND_RSTICK) == g_bind_pad[BIND_RSTICK]);
+    test_menu = false;
+    act_set(BIND_DEV_KEY, 0, SDL_SCANCODE_G);
+    assert(prompt_binding(BIND_DEV_KEY, BIND_A) == SDL_SCANCODE_G);
+    test_menu = true;
+    assert(prompt_binding(BIND_DEV_KEY, BIND_A) == g_bind_key[BIND_A]);
+    test_menu = false;
+    g_site.screen_mgr = 0;
+    assert(prompt_binding(BIND_DEV_PAD, BIND_A) == SDL_GAMEPAD_BUTTON_SOUTH);
+    act_reset();
+    g_settings.button_icons = ICONS_AUTO;
 
     // Automatic also follows per-action swaps when g_bind_pad is at default
     bind_reset(BIND_DEV_PAD);

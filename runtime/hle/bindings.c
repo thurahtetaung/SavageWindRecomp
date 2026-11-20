@@ -8,6 +8,7 @@
 #include "../hle.h"
 #include "../input_bind.h"
 #include "../game_sites.h"
+#include "../framepace.h"
 #include "../settings.h"
 
 _Static_assert(PADB_LTRIGGER == SDL_GAMEPAD_BUTTON_COUNT, "trigger pseudo-buttons follow SDL's buttons");
@@ -510,6 +511,8 @@ uint64_t act_scan_pad(uint64_t pad_buttons, uint32_t host_buttons) {
     return out;
 }
 
+static bool prompt_blocks_action(int id);
+
 static bool act_held_host(int id, int (*held)(int scancode), uint32_t host) {
     if (id < 0 || id >= ACT_COUNT) return false;
     int k = g_act_key[id], p = g_act_pad[id];
@@ -522,7 +525,7 @@ static bool act_held_host(int id, int (*held)(int scancode), uint32_t host) {
 uint64_t act_gameplay_buttons(uint64_t raw, int (*held)(int scancode), uint32_t host) {
     raw &= ~((1ull << BIND_Y) | (1ull << BIND_X) | (1ull << BIND_A) | (1ull << BIND_B));
     if (act_held_host(3, held, host) || act_held_host(36, held, host)) raw |= 1ull << BIND_Y;
-    if (act_held_host(2, held, host)) raw |= 1ull << BIND_X;
+    if (act_held_host(2, held, host) && !prompt_blocks_action(2)) raw |= 1ull << BIND_X;
     if (act_held_host(0, held, host)) raw |= 1ull << BIND_A;
     if (act_held_host(12, held, host) || act_held_host(14, held, host)) raw |= 1ull << BIND_B;
     return raw;
@@ -662,6 +665,8 @@ static bool interact_prompt_up(void) {
 // game asks about Jump, so the press that picked something up still counts as the prompt's for a moment
 #define PROMPT_GRACE_MS 250
 static _Atomic uint64_t a_prompt_ms;
+static _Atomic uint64_t a_prompt_latch;
+static _Atomic bool a_prompt_seen;
 
 // id would answer through Interact's button although the game puts it on another Switch button
 static bool shares_interact(int id) {
@@ -675,6 +680,11 @@ static bool any_shares_interact(void) {
     return false;
 }
 
+static bool prompt_blocks_action(int id) {
+    return shares_interact(id) && ((a_prompt_latch >> id & 1) ||
+        (a_prompt_seen && SDL_GetTicks() - a_prompt_ms < PROMPT_GRACE_MS));
+}
+
 // ---- the controller poll and the game's queries
 #define EDGE_KEEP_MS 100  // (several of the game's updates at any frame rate it runs at)
 static _Atomic uint64_t a_prev;
@@ -684,6 +694,19 @@ void act_poll(bool live) {
     static bool was_live;
     uint64_t custom = a_custom;
     uint64_t cur = live ? (a_keys | a_pads) & custom : 0, prev = a_prev;
+    uint64_t now = SDL_GetTicks();
+    if (live && any_shares_interact() && (interact_prompt_up() ||
+        (g_site.screen_mgr && framepace_dialogue_ui()))) {
+        a_prompt_ms = now;
+        a_prompt_seen = true;
+    }
+    // A press used to talk belongs to the conversation until released, even if
+    // its closing animation ends while the button is still held.
+    uint64_t latched = a_prompt_latch & cur;
+    if (a_prompt_seen && now - a_prompt_ms < PROMPT_GRACE_MS)
+        for (int id = 1; id < ACT_COUNT; id++)
+            if ((cur >> id & 1) && shares_interact(id)) latched |= 1ull << id;
+    a_prompt_latch = latched;
     if (live && !was_live) prev = cur;  // held through a menu closing: not a new press
     uint64_t edge = cur & ~prev;
     // A poll nobody read (no pressed query since the last one) keeps its edge for the next, so a press is never lost
@@ -691,16 +714,15 @@ void act_poll(bool live) {
     // message is up ("You got ..." after a new item) the game asks about no player action, and the press that closed
     // it, kept until the player was asked again, jumped as soon as the message was gone
     static uint64_t edge_ms;
-    uint64_t now = SDL_GetTicks(), kept = a_served ? 0 : a_trig;
+    uint64_t kept = a_served ? 0 : a_trig;
     if (kept && now - edge_ms > EDGE_KEEP_MS) kept = 0;
     if (edge) edge_ms = now;
-    a_trig = (kept | edge) & custom;
+    a_trig = (kept | edge) & custom & ~latched;
     a_served = false;
     a_hold = cur;
     a_prev = cur;
     a_live = live;
     was_live = live;
-    if (live && any_shares_interact() && interact_prompt_up()) a_prompt_ms = now;
     if (act_log_on()) act_log_poll();
 }
 
@@ -726,7 +748,7 @@ int rt_act_query(int kind, uint64_t pad, uint64_t id, uint64_t lr, uint64_t mask
     } else {
         r = (int)(a_hold >> id & 1);
     }
-    if (r && shares_interact((int)id) && SDL_GetTicks() - a_prompt_ms < PROMPT_GRACE_MS)
+    if (r && prompt_blocks_action((int)id))
         r = 0;  // (the prompt's button answers the prompt)
     if (r && act_log_on()) l_true[kind] |= 1ull << id;
     return r;

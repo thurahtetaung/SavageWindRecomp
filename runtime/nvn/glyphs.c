@@ -28,6 +28,8 @@
 #include "glyphs.h"
 #include "hw_illust.h"
 #include "../hle.h"
+#include "../framepace.h"
+#include "../game_sites.h"
 #include "../input_bind.h"
 #include "../paths.h"
 #include "../rt.h"
@@ -545,6 +547,22 @@ static int face_vertex(int host) {
     }
 }
 
+// Gameplay and menu prompts share glyphs but have independent host bindings.
+// Use the same pause/title contexts as input.c to choose between them.
+static bool gameplay_prompt(void) {
+    return g_site.screen_mgr && !framepace_title_ui() && !framepace_menu_ui();
+}
+
+static int prompt_binding(int dev, int slot) {
+    static const int actions[4] = {0, 14, 2, 3};  // Interact, Cancel, Jump, Attack
+    if (gameplay_prompt()) {
+        int id = slot >= BIND_A && slot <= BIND_Y ? actions[slot - BIND_A] :
+                 slot == BIND_RSTICK ? 15 : -1;  // Scope
+        if (id >= 0) return dev == BIND_DEV_PAD ? g_act_pad[id] : g_act_key[id];
+    }
+    return dev == BIND_DEV_PAD ? g_bind_pad[slot] : g_bind_key[slot];
+}
+
 void glyphs_hud_positions(int pos[4]) {
     static const int k_presets[BUTTON_LAYOUT_COUNT][4] = {
         {0, 1, 2, 3},  // BUTTON_LAYOUT_AUTO (fallback: Nintendo)
@@ -560,16 +578,7 @@ void glyphs_hud_positions(int pos[4]) {
         return;
     }
     int p[4], mask = 0;
-    for (int i = 0; i < 4; i++) {
-        p[i] = face_vertex(g_bind_pad[BIND_A + i]);
-        if (p[i] >= 0) mask |= 1 << p[i];
-    }
-    if (mask == 0xF && (p[0] != 0 || p[1] != 1 || p[2] != 2 || p[3] != 3)) {
-        memcpy(pos, p, sizeof p);
-        return;
-    }
     static const int k_acts[4] = {0, 14, 2, 3};  // Interact (A), Cancel (B), Jump (X), Attack (Y)
-    mask = 0;
     for (int i = 0; i < 4; i++) {
         int h = g_act_pad[k_acts[i]];
         if (h == ACT_FOLLOW) h = g_bind_pad[BIND_A + i];
@@ -596,6 +605,12 @@ static uint32_t generation(bool cursor) {
         h = (h ^ g_settings.mouse_camera) * 16777619u;
     } else {
         for (int i = 0; i < BIND_PAD_COUNT; i++) h = (h ^ (uint16_t)g_bind_pad[i]) * 16777619u;
+    }
+    if (cursor) {  // game textures, not the overlay's menu-icon font
+        h = (h ^ gameplay_prompt()) * 16777619u;
+        static const int actions[] = {0, 14, 2, 3, 15};
+        for (unsigned i = 0; i < sizeof actions / sizeof *actions; i++)
+            h = (h ^ (uint16_t)(k == ICONS_KEYBOARD ? g_act_key[actions[i]] : g_act_pad[actions[i]])) * 16777619u;
     }
     return h | 1;
 }
@@ -639,7 +654,7 @@ static bool draw_glyph(Canvas *c, Box b, int code, int kind, int *copy) {
     int fam = kind == ICONS_PLAYSTATION ? 2 : kind == ICONS_STEAMDECK ? 3 : 1;
     if (kind == ICONS_NINTENDO) {  // the game's glyphs, following the controller bindings
         int host = -1;
-        if (m.kind == G_BUTTON) host = g_bind_pad[m.arg];
+        if (m.kind == G_BUTTON) host = prompt_binding(BIND_DEV_PAD, m.arg);
         else if (m.kind == G_DPAD && !(m.arg & (m.arg - 1))) host = g_bind_pad[k_dpad_slot[dir_index(m.arg)]];
         int want = host >= 0 ? nintendo_code(host) : 0;
         if (want && want != code) *copy = want;
@@ -649,7 +664,7 @@ static bool draw_glyph(Canvas *c, Box b, int code, int kind, int *copy) {
         switch (m.kind) {
         case G_BUTTON:
             if(m.arg==BIND_RSTICK&&pc_cursor_preview_active()) {mouse(c,b,SDL_BUTTON_LEFT,0);return true;}
-            key_icon(c, b, m.arg==BIND_Y&&pc_cursor_sensor_active()?g_bind_key[BIND_LEFT]:g_bind_key[m.arg]); return true;
+            key_icon(c, b, m.arg==BIND_Y&&pc_cursor_sensor_active()?g_bind_key[BIND_LEFT]:prompt_binding(BIND_DEV_KEY, m.arg)); return true;
         case G_DPAD:
             if (!(m.arg & (m.arg - 1))) key_icon(c, b, g_bind_key[k_dpad_slot[dir_index(m.arg)]]);
             else keys_icon(c, b, k_dpad_slot, m.arg);
@@ -672,7 +687,7 @@ static bool draw_glyph(Canvas *c, Box b, int code, int kind, int *copy) {
     }
     // Xbox / PlayStation / Steam Deck: buttons through the bindings; the sticks keep the game's (L / R)
     switch (m.kind) {
-    case G_BUTTON: pad_button(c, b, g_bind_pad[m.arg], fam); return true;
+    case G_BUTTON: pad_button(c, b, prompt_binding(BIND_DEV_PAD, m.arg), fam); return true;
     case G_DPAD:
         if (!(m.arg & (m.arg - 1))) {
             int host = g_bind_pad[k_dpad_slot[dir_index(m.arg)]];
